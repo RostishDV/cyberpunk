@@ -3,7 +3,12 @@
  * but layers eurobucks movement on top, and posts a different chat message.
  *
  * Conceptually buying is "shop → buyer" with eddies going "buyer → shop",
- * and selling is the inverse. Both flow through `executeTrade()`.
+ * and selling is the inverse. Both flow through `moveItemForTrade()`.
+ *
+ * Shops stock every item type as a counted stack (one document, `quantity`
+ * copies). Characters keep that shape only for the genuinely stackable types
+ * (drug doses, ammo rounds, ordnance count); every other item lives on a
+ * character as one document per item.
  */
 import { MoveItemsDialog } from "../dialog/move-items-dialog.js";
 import { detachAllChildren, isStackable, findMergeTarget } from "./item-transfer.js";
@@ -11,37 +16,52 @@ import { renderTemplateCompat } from "../utils.js";
 
 const EUROBUCKS_PATH = "system.gear.eurobucks";
 
+/** Document fields that never distinguish one unit of stock from another. */
+const STACK_KEY_IGNORED = ["quantity", "equipped", "sourceUuid", "lastOwnerId", "attachedTo"];
+
+/** Ammo is the one item type whose stock is counted in rounds but traded in packs. */
+export function isAmmo(item) {
+  return item.type === "weapon" && item.system?.weaponType === "Ammo";
+}
+
+/**
+ * Stock held by a document, in its own storage units (ammo: rounds;
+ * everything else: doses / items). An unset or zero quantity counts as one
+ * unit — one pack for ammo — matching how legacy rows have always displayed.
+ */
+export function stockQuantity(item) {
+  const sys = item.system ?? {};
+  if (isAmmo(item)) {
+    const packSize = Math.max(1, Number(sys.packSize) || 1);
+    return Math.max(1, Number(sys.quantity) || packSize);
+  }
+  return Math.max(1, Math.floor(Number(sys.quantity) || 1));
+}
+
 /**
  * Express a tradeable item in "trade unit" terms.
- *   drug   → 1 unit = 1 dose,        perUnitRounds = 1
- *   ammo   → 1 unit = 1 pack,        perUnitRounds = packSize
- *   other  → 1 unit = 1 item,        perUnitRounds = 1
- * The Buy / Sell quantity dialog is bounded by `units`, and the actor's
- * underlying `system.quantity` field is mutated by `tradeQty * perUnitRounds`.
- * `priceMultiplier` (e.g. 0.75 for a 75 % sell shop) scales the per-unit cost
- * — must be applied here, not at the display layer, so the price the buyer
- * sees is exactly the price they're charged.
+ *   ammo   → 1 unit = 1 pack,           perUnitRounds = packSize
+ *   other  → 1 unit = 1 dose / 1 item,  perUnitRounds = 1
+ * Shop stock of any type is a counted stack; on a character only stackable
+ * types carry a count — a character's pistol is a single unit. The Buy / Sell
+ * quantity dialog is bounded by `units`, and the underlying `system.quantity`
+ * moves by `tradeQty * perUnitRounds`. `priceMultiplier` (e.g. 0.75 for a
+ * 75 % sell shop) scales the per-unit cost — applied here, not at the display
+ * layer, so the price the buyer sees is exactly the price they're charged.
  */
-function tradeUnitInfo(item, priceMultiplier = 1) {
+export function tradeUnitInfo(item, priceMultiplier = 1) {
   const baseCost = Number(item.system?.cost) || 0;
-  const cost = Math.max(0, Math.round(baseCost * priceMultiplier));
-  if (item.type === "drug") {
+  const perUnitCost = Math.max(0, Math.round(baseCost * priceMultiplier));
+  if (isAmmo(item)) {
+    const perUnitRounds = Math.max(1, Number(item.system?.packSize) || 1);
     return {
-      units: Math.max(1, Number(item.system?.quantity) || 1),
-      perUnitRounds: 1,
-      perUnitCost: cost
+      units: Math.max(1, Math.floor(stockQuantity(item) / perUnitRounds)),
+      perUnitRounds,
+      perUnitCost
     };
   }
-  if (item.type === "weapon" && item.system?.weaponType === "Ammo") {
-    const packSize = Math.max(1, Number(item.system?.packSize) || 1);
-    const total = Math.max(packSize, Number(item.system?.quantity) || packSize);
-    return {
-      units: Math.max(1, Math.floor(total / packSize)),
-      perUnitRounds: packSize,
-      perUnitCost: cost
-    };
-  }
-  return { units: 1, perUnitRounds: 1, perUnitCost: cost };
+  const counted = item.parent?.type === "shop" || isStackable(item);
+  return { units: counted ? stockQuantity(item) : 1, perUnitRounds: 1, perUnitCost };
 }
 
 /** Read the shop's price multiplier for the given side ("buy" or "sell"). */
@@ -58,20 +78,23 @@ function getEurobucks(actor) {
 
 /**
  * Sellable means "not currently in active use" — equipped off, drug not in
- * the active phase, and not currently attached to a parent item.
+ * the active phase, and not currently attached to a parent item (cyberware /
+ * armor options via the flag, weapon options via `system.attachedTo`).
  */
 export function isSellable(item) {
   if (item.system?.equipped) return false;
   if (item.type === "drug" && item.system?.phase === "active") return false;
   if (item.getFlag?.("cyberpunk", "attachedTo")) return false;
+  if (item.system?.attachedTo) return false;
   return true;
 }
 
 /**
- * Same factory-reset rules as a cross-actor transfer, kept local so this
- * module doesn't have to import the cross-actor helpers. Keep in sync.
+ * Factory-reset plain document data (`item.toObject()`) in place before it
+ * changes hands. Mirrors `buildTransferData` in item-transfer.js — keep the
+ * two in sync.
  */
-function resetForTrade(data) {
+export function resetForTrade(data) {
   if (!data?.system) return;
   const s = data.system;
   data.system.equipped = false;
@@ -83,6 +106,8 @@ function resetForTrade(data) {
         data.system.attachedAmmoId = "";
         data.system.shotsLeft = 0;
       }
+      // Weapon options leave their weapon behind.
+      if (s.attachedTo) data.system.attachedTo = "";
       break;
     }
     case "armor": {
@@ -111,18 +136,60 @@ function resetForTrade(data) {
   if (flagsCp && "attachedTo" in flagsCp) delete flagsCp.attachedTo;
 }
 
+/** JSON with object keys sorted, so field order never splits a stack. */
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort()
+      .filter(k => value[k] !== undefined)
+      .map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 /**
- * Move `qty` units of `sourceItem` from its owner to `targetActor`,
- * factory-resetting along the way. Stackable items decrement or delete the
- * source row; non-stackable items detach any attached children (they stay
- * with the seller) and move the parent alone.
+ * Identity of a shop stack. Two items share a key — and so a shop row — when
+ * they're interchangeable once factory-reset for trade: same type, name
+ * (case-insensitive), image, system data and embedded effects, ignoring the
+ * count itself, equip state and provenance / attachment ids. An item a GM
+ * customised keeps its own row instead of being merged away. Accepts a
+ * document or plain document data.
+ */
+export function shopStackKey(itemOrData) {
+  const data = typeof itemOrData.toObject === "function"
+    ? itemOrData.toObject()
+    : foundry.utils.deepClone(itemOrData);
+  resetForTrade(data);
+  const system = { ...(data.system ?? {}) };
+  for (const field of STACK_KEY_IGNORED) delete system[field];
+  const effects = (data.effects ?? []).map(({ _id, _stats, origin, ...effect }) => effect);
+  return stableStringify({
+    type: data.type,
+    name: (data.name ?? "").trim().toLowerCase(),
+    img: data.img,
+    system,
+    effects
+  });
+}
+
+/**
+ * Move `qty` stock units (rounds for ammo) of `sourceItem` from its owner to
+ * `targetActor`, factory-resetting along the way.
+ *
+ * Taking: a shop stack, or a character's stackable item, decrements (deleting
+ * at zero). Any other character item is a single document — its attached
+ * children are detached (they stay with the seller) and it moves whole.
+ * Giving: a shop merges into the matching stack (`shopStackKey`); a character
+ * merges stackables into its existing stack and receives every other item as
+ * `qty` individual documents.
  */
 async function moveItemForTrade(sourceItem, targetActor, qty) {
   const sourceActor = sourceItem.parent;
   const stackable = isStackable(sourceItem);
-  const sourceQty = stackable ? (Number(sourceItem.system?.quantity) || 1) : 1;
 
-  if (stackable) {
+  if (sourceActor.type === "shop" || stackable) {
+    const sourceQty = stockQuantity(sourceItem);
     if (qty < sourceQty) {
       await sourceActor.updateEmbeddedDocuments("Item", [{
         _id: sourceItem.id,
@@ -131,31 +198,48 @@ async function moveItemForTrade(sourceItem, targetActor, qty) {
     } else {
       await sourceActor.deleteEmbeddedDocuments("Item", [sourceItem.id]);
     }
-    const existing = findMergeTarget(sourceItem, targetActor);
+  } else {
+    // Weapons are sold unloaded; options stay with the seller.
+    await detachAllChildren(sourceItem);
+    await sourceActor.deleteEmbeddedDocuments("Item", [sourceItem.id]);
+  }
+
+  const data = sourceItem.toObject();
+  delete data._id;
+  resetForTrade(data);
+
+  if (targetActor.type === "shop") {
+    const key = shopStackKey(data);
+    const existing = targetActor.items.find(i => shopStackKey(i) === key);
     if (existing) {
-      const newQty = (Number(existing.system?.quantity) || 0) + qty;
       await targetActor.updateEmbeddedDocuments("Item", [{
         _id: existing.id,
-        "system.quantity": newQty
+        "system.quantity": stockQuantity(existing) + qty
       }]);
     } else {
-      const data = sourceItem.toObject();
-      resetForTrade(data);
       data.system.quantity = qty;
-      delete data._id;
       await targetActor.createEmbeddedDocuments("Item", [data]);
     }
-  } else {
-    // Detach attachments — they remain on the source actor — then move only
-    // the parent. Mirrors "weapons are sold unloaded" / "options stay with
-    // the seller" from the spec.
-    await detachAllChildren(sourceItem);
-    const data = sourceItem.toObject();
-    delete data._id;
-    resetForTrade(data);
-    await sourceActor.deleteEmbeddedDocuments("Item", [sourceItem.id]);
-    await targetActor.createEmbeddedDocuments("Item", [data]);
+    return;
   }
+
+  if (stackable) {
+    const existing = findMergeTarget(sourceItem, targetActor);
+    if (existing) {
+      await targetActor.updateEmbeddedDocuments("Item", [{
+        _id: existing.id,
+        "system.quantity": (Number(existing.system?.quantity) || 0) + qty
+      }]);
+    } else {
+      data.system.quantity = qty;
+      await targetActor.createEmbeddedDocuments("Item", [data]);
+    }
+    return;
+  }
+
+  data.system.quantity = 1;
+  await targetActor.createEmbeddedDocuments("Item",
+    Array.from({ length: qty }, () => foundry.utils.deepClone(data)));
 }
 
 /**
@@ -202,10 +286,10 @@ async function postTradeMessage(mode, character, shop, item, count) {
 
 /**
  * Buy `item` from `shop` on behalf of `buyer`. Pops the Buy Items dialog
- * for stackables with more than one trade unit. Cost is `perUnitCost × tradeQty`;
- * underlying quantity moved is `tradeQty × perUnitRounds` (so an ammo pack of
- * 20 transfers 20 rounds per pack). Returns true on success, false if
- * cancelled or unaffordable.
+ * whenever the stack holds more than one trade unit. Cost is
+ * `perUnitCost × tradeQty`; underlying quantity moved is
+ * `tradeQty × perUnitRounds` (so an ammo pack of 20 transfers 20 rounds per
+ * pack). Returns true on success, false if cancelled or unaffordable.
  */
 export async function buyItem(buyer, shop, item) {
   if (!buyer || !shop || !item) return false;
@@ -237,7 +321,7 @@ export async function buyItem(buyer, shop, item) {
 /**
  * Sell `item` from `seller` to `shop`. Same trade-unit logic as `buyItem`;
  * weapons / armor / cyberware get their attachments detached (children stay
- * with the seller), then the clean parent moves to the shop.
+ * with the seller), then the clean parent joins the shop's matching stack.
  */
 export async function sellItem(seller, shop, item) {
   if (!seller || !shop || !item) return false;

@@ -1,4 +1,4 @@
-import { buildMartialModifierGroups, meleeAttackTypes, buildRangedModifierGroups, weaponTypes, ammoAbbreviations, meleeDamageBonus, programSubtypes, boosterBonuses, defenderDefences, attackerClasses, attackerEffects, upgradeEffects, getFlavourMeta, cumulativeEffects } from "../lookups.js"
+import { buildMartialModifierGroups, meleeAttackTypes, buildRangedModifierGroups, weaponTypes, ammoAbbreviations, meleeDamageBonus, programSubtypes, boosterBonuses, defenderDefences, attackerClasses, attackerEffects, upgradeEffects, getFlavourMeta, cumulativeEffects, scaleMeleeDamage } from "../lookups.js"
 import { localize, tabBeautifying, toTitleCase, bindHoverTooltips, commitPendingEdits, buildStatButtons, renderTemplateCompat, getFilePickerClass, getImagePopoutClass } from "../utils.js"
 import { processFormulaRoll, RollBundle, isNaturalOne } from "../dice.js"
 import { ModifiersDialog } from "../dialog/modifiers.js"
@@ -21,7 +21,7 @@ import { HealDialog } from "../dialog/heal-dialog.js"
 import { spendNetAction } from "../action-tracker.js"
 import { CyberdeckActionDialog } from "../dialog/cyberdeck-action-dialog.js"
 import { performAttackerStrike, performBlackIceProgramActivate } from "../netrun/net-attack.js"
-import { buildWeaponsList, buildOrdnanceList, buildAmmoList, buildCoverToggles, buildAmmoContext, buildWeaponContextString, buildCyberwareContext, formatBonusLabel, summariseBonuses } from "./gear-data.js"
+import { buildWeaponsList, buildOrdnanceList, buildAmmoList, buildOptionsList, buildCoverToggles, buildAmmoContext, buildWeaponContextString, buildCyberwareContext, formatBonusLabel, summariseBonuses } from "./gear-data.js"
 import { calibers as CALIBERS } from "../calibers.js"
 import { resolveWeaponDiscriminator } from "../lookups.js"
 import {
@@ -30,7 +30,7 @@ import {
   isSensorOption
 } from "../lookups.js"
 import { bindWeaponAndOrdnanceHandlers } from "./gear-handlers.js"
-import { shouldTransfer, transferItem, handleAmmoDrop, handleOrdnanceDrop } from "./item-transfer.js"
+import { shouldTransfer, transferItem, handleAmmoDrop, handleOptionDrop, handleOrdnanceDrop } from "./item-transfer.js"
 
 // `formatBonusLabel` + `summariseBonuses` live in gear-data.js — imported above.
 
@@ -1462,22 +1462,10 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
 
     // Unarmed attack damage display
     const unarmedBase = this.actor.system.unarmedBaseDamage;
-    const unarmedMult = this.actor.system.unarmedDamageMultiplier;
+    const meleeMult = this.actor.system.unarmedDamageMultiplier;
     const bodyBonus = meleeDamageBonus(this.actor.system.stats.bt.total);
 
-    let baseDamageStr;
-    if (unarmedMult <= 1) {
-      baseDamageStr = unarmedBase;
-    } else {
-      // Base damage is always "XdY" format, multiply dice count
-      const diceMatch = unarmedBase.match(/^(\d+)d(\d+)$/);
-      if (diceMatch) {
-        baseDamageStr = `${Number(diceMatch[1]) * unarmedMult}d${diceMatch[2]}`;
-      } else {
-        // Shouldn't happen with new format, but keep as fallback
-        baseDamageStr = `(${unarmedBase})×${unarmedMult}`;
-      }
-    }
+    const baseDamageStr = scaleMeleeDamage(unarmedBase, meleeMult).display;
 
     // Add BODY modifier to damage display
     if (bodyBonus !== 0) {
@@ -1489,13 +1477,7 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
 
     // Kick damage (for unarmed tooltip)
     const kickBase = this.actor.system.kickBaseDamage;
-    let kickDamageStr;
-    if (unarmedMult <= 1) {
-      kickDamageStr = kickBase;
-    } else {
-      const dm = kickBase.match(/^(\d+)d(\d+)$/);
-      kickDamageStr = dm ? `${Number(dm[1]) * unarmedMult}d${dm[2]}` : kickBase;
-    }
+    let kickDamageStr = scaleMeleeDamage(kickBase, this.actor.system.kickDamageMultiplier).display;
     if (bodyBonus !== 0) {
       const sign = bodyBonus > 0 ? "+" : "";
       kickDamageStr = `${kickDamageStr} ${sign}${bodyBonus}`;
@@ -1986,6 +1968,10 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
     // Ammo (shared with drone sheet)
     sheetData.ammoItems = buildAmmoList(this.actor);
 
+    // Detached Weapon Options — attached ones nest under their weapon
+    // row via `weapon.attachedOptions` (set inside buildWeaponsList).
+    sheetData.optionItems = buildOptionsList(this.actor);
+
     // Flag to check if there's any gear at all
     sheetData.hasAnyGear =
       sheetData.weapons.length > 0 ||
@@ -1994,7 +1980,8 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
       sheetData.toolItems.length > 0 ||
       sheetData.drugItems.length > 0 ||
       sheetData.gearItems.length > 0 ||
-      sheetData.ammoItems.length > 0;
+      sheetData.ammoItems.length > 0 ||
+      sheetData.optionItems.length > 0;
   }
 
   /**
@@ -2838,11 +2825,16 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
         }
       });
 
-    // Skill roll - open dialog
+    // Skill roll - open dialog. Chip-only ("virtual") rows have no skill
+    // item on the actor, so take their name / stat from the chipware bonus;
+    // performSkillRoll and rollSkillCheck already branch on the virtual id.
     html.find(".skill-roll").click(ev => {
       const id = ev.currentTarget.dataset.skillId;
       const skill = this.actor.items.get(id);
-      if (!skill) return;
+      const virtual = skill ? null : this.actor.resolveVirtualSkill(id);
+      if (!skill && !virtual) return;
+      const skillLabel = skill?.name ?? virtual.name;
+      const skillStat = skill?.system?.stat ?? virtual.stat;
 
       // If askMods is set, use legacy ModifiersDialog for backward compatibility
       if (skill.system?.askMods) {
@@ -2871,8 +2863,8 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
       new SkillRollDialog(this.actor, {
         rollType: "skill",
         skillId: id,
-        title: skill.name,
-        statIcon: skill.system.stat
+        title: skillLabel,
+        statIcon: skillStat
       }).render(true);
     });
 
@@ -4333,6 +4325,10 @@ export class CyberpunkCharacterSheet extends HandlebarsApplicationMixin(ActorShe
     // or create a fresh pack. Shared helper keeps character + drone
     // behaviour in lockstep.
     if (await handleAmmoDrop(this.actor, event, item)) return;
+
+    // Weapon Option drops — attach to a target weapon row (validates
+    // one-per-type) or land detached in the Options section.
+    if (await handleOptionDrop(this.actor, event, item)) return;
 
     // Ordnance drops — stack by identity (compendium source or
     // name+template+effect) so duplicate grenades increment a Count

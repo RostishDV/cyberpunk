@@ -17,7 +17,8 @@ import {
   buildDrugContext,
   buildCommodityContext
 } from "./gear-data.js";
-import { buyItem, sellItem, isSellable } from "./shop-trade.js";
+import { buyItem, sellItem, isSellable, isAmmo, tradeUnitInfo, shopStackKey, stockQuantity, resetForTrade } from "./shop-trade.js";
+import { isStackable } from "./item-transfer.js";
 import { attachRowMenu, delegateEntry } from "../ui/row-context-menu.js";
 import { ShopSettingsDialog } from "../dialog/shop-settings-dialog.js";
 
@@ -81,6 +82,19 @@ function isOption(item) {
   return false;
 }
 
+/**
+ * Stock added to the shop when `item` is dropped onto it. Ammo stocks one
+ * pack per drop (the shop sells per pack); genuinely stackable items (drug
+ * doses, ordnance count) bring their own quantity, as does a stack dragged
+ * over from another shop; every other item is a single unit.
+ */
+function dropQuantity(item) {
+  if (item.parent?.type === "shop") return stockQuantity(item);
+  if (isAmmo(item)) return Math.max(1, Number(item.system?.packSize) || 20);
+  if (isStackable(item)) return stockQuantity(item);
+  return 1;
+}
+
 /** Total SP across all hit-location coverage for an armor item. */
 function armorTotalSP(armor) {
   const cov = armor.system?.coverage || {};
@@ -121,19 +135,18 @@ function buildSubtext(item) {
 /**
  * Per-type display fields rendered in the two middle slots of a gear row.
  * Returns `{ field1: { value, label }, field2: { value, label } | null }`.
- * Each field renders as a 60–80px column (.gear-field with .field-top /
+ * Each field renders as a 60px column (.gear-field with .field-top /
  * .field-bottom). Returning null hides that field — the empty `.gear-field`
- * placeholder fills the space so the row layout doesn't jump.
+ * placeholder fills the space so the row layout doesn't jump. Quantity is
+ * not a per-type field: every row gets its own Quantity column (see
+ * `_buildCategories`).
  */
 function buildFields(item) {
   const sys = item.system || {};
-  if (item.type === "weapon" && sys.weaponType === "Ammo") {
-    const packSize = Math.max(1, Number(sys.packSize) || 1);
-    const total = Math.max(packSize, Number(sys.quantity) || packSize);
-    const packsAvail = Math.floor(total / packSize);
+  if (isAmmo(item)) {
     return {
-      field1: { value: packSize, label: "Pack" },
-      field2: { value: packsAvail, label: "Quantity" }
+      field1: { value: Math.max(1, Number(sys.packSize) || 1), label: "Pack" },
+      field2: null
     };
   }
   if (item.type === "weapon") {
@@ -155,27 +168,18 @@ function buildFields(item) {
     };
   }
   if (item.type === "cyberware") {
-    const hum = String(sys.humanityCost ?? "0").trim() || "0";
+    // Bases (optics, limbs) show the option spaces they offer; options show
+    // the spaces they take.
     const slots = Number(sys.hasSlots) || 0;
-    const spaces = Number(sys.takesSpace) || 0;
-    const slotsLabel = slots > 0 ? `${slots} / ${spaces}` : `${spaces}`;
-    const slotsName  = slots > 0 ? "Options" : "Spaces";
     return {
-      field1: { value: hum, label: "Humanity" },
-      field2: { value: slotsLabel, label: slotsName }
+      field1: { value: String(sys.humanityCost ?? "0").trim() || "0", label: "Humanity" },
+      field2: { value: slots > 0 ? slots : (Number(sys.takesSpace) || 0), label: "Spaces" }
     };
   }
   if (item.type === "netware") {
     const slots = Number(sys.slots) || 0;
-    const space = Number(sys.takesSpace) || 0;
     return {
-      field1: { value: slots > 0 ? slots : space, label: slots > 0 ? "Program Slots" : "Slots" },
-      field2: null
-    };
-  }
-  if (item.type === "drug") {
-    return {
-      field1: { value: Number(sys.quantity) || 1, label: "Quantity" },
+      field1: { value: slots > 0 ? slots : (Number(sys.takesSpace) || 0), label: "Slots" },
       field2: null
     };
   }
@@ -204,7 +208,7 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
   /**
    * Sheet lock state. Defaults locked; GM toggles via the header lock button.
    * Unlocked mode (only meaningful for GMs — the toggle is GM-gated in the
-   * template) makes the actor name + portrait + stackable quantities editable.
+   * template) makes the actor name + portrait + stock quantities editable.
    */
   _isLocked = true;
   _isMinimized = false;
@@ -400,24 +404,18 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
   }
 
   /**
-   * One-shot pass when the sheet first opens: merge any duplicate same-name
-   * drugs and same-(name, caliber, ammoType) ammo stacks into single rows.
+   * One-shot pass when the sheet first opens: merge every group of
+   * interchangeable items (same `shopStackKey`) into a single counted row.
    * After this runs once per session, the `_onDropItem` override below keeps
-   * future drops from creating new duplicates.
+   * future drops from creating new duplicates. Only the active GM runs it —
+   * players own shops too, and two clients consolidating at once would race
+   * each other's deletes.
    */
-  async _consolidateStackables() {
-    const norm = (s) => (s ?? "").toString().trim().toLowerCase();
+  async _consolidateStock() {
     const groups = new Map();
     for (const item of this.actor.items.contents) {
-      let key = null;
-      if (item.type === "drug") {
-        key = `drug:${norm(item.name)}`;
-      } else if (item.type === "weapon" && item.system?.weaponType === "Ammo") {
-        const cal = item.system?.caliber || "";
-        const at  = item.system?.ammoType || "";
-        key = `ammo:${norm(item.name)}:${cal}:${at}`;
-      }
-      if (!key) continue;
+      if (!categorise(item)) continue;
+      const key = shopStackKey(item);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
@@ -426,7 +424,7 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
     for (const items of groups.values()) {
       if (items.length <= 1) continue;
       const [keeper, ...extras] = items;
-      const total = items.reduce((sum, i) => sum + (Number(i.system?.quantity) || 1), 0);
+      const total = items.reduce((sum, i) => sum + stockQuantity(i), 0);
       updates.push({ _id: keeper.id, "system.quantity": total });
       deletes.push(...extras.map(i => i.id));
     }
@@ -437,71 +435,47 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
   /**
    * Capture gear-container scroll on every render so the V2 PARTS.scrollable
    * pipeline restores it after the fresh DOM lands. We also kick off the
-   * one-shot stackables consolidation here on the first render.
+   * one-shot stock consolidation here on the first render.
    */
   _preRender(context, options) {
     if (!this._consolidatedOnOpen) {
       this._consolidatedOnOpen = true;
-      this._consolidateStackables();
+      if (game.user.id === game.users.activeGM?.id) this._consolidateStock();
     }
     return super._preRender?.(context, options);
   }
 
   /**
-   * @override Stackables (drug, Ammo) merge with existing same-shape stacks
-   * on the shop instead of creating duplicate rows. Ammo also initialises to
-   * one pack's worth of quantity, mirroring the character sheet's drop logic
-   * — the shop sells per pack, so each compendium drop = one pack of ammo.
-   * Everything else falls through to Foundry's default handler.
+   * @override Every shop item is a counted stack: a drop merges into the
+   * existing stack of interchangeable items (same `shopStackKey`, compared
+   * after the same factory reset a trade applies) or opens a fresh stack.
+   * Ammo stocks one pack per drop, mirroring the character sheet's drop logic
+   * — the shop sells per pack. Drops from this same shop (reordering) and
+   * non-gear types fall through to Foundry's default handler; merging an item
+   * into its own stack would double it.
    */
   async _onDropItem(event, item) {
     if (!item) return;
+    if (item.parent?.uuid === this.actor.uuid || !categorise(item)) {
+      return super._onDropItem(event, item);
+    }
     event.preventDefault();
 
-    const norm = (s) => (s ?? "").toString().trim().toLowerCase();
+    const addQty = dropQuantity(item);
+    const data = item.toObject();
+    resetForTrade(data);
+    delete data._id;
 
-    if (item.type === "drug") {
-      const dropQty = Number(item.system?.quantity) || 1;
-      const existing = this.actor.items.find(i =>
-        i.type === "drug" && norm(i.name) === norm(item.name)
-      );
-      if (existing) {
-        const newQty = (Number(existing.system?.quantity) || 0) + dropQty;
-        return this.actor.updateEmbeddedDocuments("Item", [{
-          _id: existing.id, "system.quantity": newQty
-        }]);
-      }
-      const newData = item.toObject();
-      newData.system.quantity = dropQty;
-      newData.system.equipped = false;
-      return this.actor.createEmbeddedDocuments("Item", [newData]);
+    const key = shopStackKey(data);
+    const existing = this.actor.items.find(i => shopStackKey(i) === key);
+    if (existing) {
+      return this.actor.updateEmbeddedDocuments("Item", [{
+        _id: existing.id, "system.quantity": stockQuantity(existing) + addQty
+      }]);
     }
-
-    if (item.type === "weapon" && item.system?.weaponType === "Ammo") {
-      const packQty = Number(item.system?.packSize) || 20;
-      const cal = item.system?.caliber || "";
-      const at  = item.system?.ammoType || "";
-      const existing = this.actor.items.find(i =>
-        i.type === "weapon" &&
-        i.system?.weaponType === "Ammo" &&
-        norm(i.name) === norm(item.name) &&
-        (i.system?.caliber || "") === cal &&
-        (i.system?.ammoType || "") === at
-      );
-      if (existing) {
-        const newQty = (Number(existing.system?.quantity) || 0) + packQty;
-        return this.actor.updateEmbeddedDocuments("Item", [{
-          _id: existing.id, "system.quantity": newQty
-        }]);
-      }
-      const newData = item.toObject();
-      newData.system.quantity = packQty;
-      if (!newData.system.sourceUuid) newData.system.sourceUuid = item.uuid;
-      newData.system.equipped = false;
-      return this.actor.createEmbeddedDocuments("Item", [newData]);
-    }
-
-    return super._onDropItem(event, item);
+    data.system.quantity = addQty;
+    if (isAmmo(item) && !data.system.sourceUuid) data.system.sourceUuid = item.uuid;
+    return this.actor.createEmbeddedDocuments("Item", [data]);
   }
 
   /** @override */
@@ -612,24 +586,21 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
       });
 
       const rows = bucket.items.map(i => {
-        const baseCost = Number(i.system?.cost) || 0;
-        const cost = Math.max(0, Math.round(baseCost * priceMultiplier));
-        const stackable = i.type === "drug" || (i.type === "weapon" && i.system?.weaponType === "Ammo");
-        const qty = stackable ? (Number(i.system?.quantity) || 1) : 1;
+        const trade = tradeUnitInfo(i, priceMultiplier);
+        const cost = trade.perUnitCost;
         const fields = buildFields(i);
-        // In unlocked mode the GM can edit a stackable row's quantity inline.
-        // Drug edits field1 (Quantity, 1 dose per step); ammo edits field2
-        // (Quantity in *packs*, multiplied by packSize on commit).
-        if (isUnlocked && stackable) {
-          if (i.type === "drug" && fields.field1) {
-            fields.field1.editable = true;
-            fields.field1.editAs   = "qty";
-          } else if (i.type === "weapon" && i.system?.weaponType === "Ammo" && fields.field2) {
-            fields.field2.editable = true;
-            fields.field2.editAs   = "packs";
-            fields.field2.packSize = Math.max(1, Number(i.system?.packSize) || 1);
-          }
-        }
+        // Quantity column shows trade units (doses / packs / items) — the same
+        // count the Buy / Sell dialog is bounded by. In unlocked mode the GM
+        // can edit it inline: any shop stock on the Buy tab, but only the
+        // seller's genuinely stackable items on the Sell tab (a character's
+        // pistol is one document, not a count). Ammo edits in packs,
+        // multiplied by packSize on commit.
+        const quantity = {
+          value: trade.units,
+          editable: isUnlocked && (mode === "buy" || isStackable(i)),
+          editAs: isAmmo(i) ? "packs" : "qty",
+          packSize: isAmmo(i) ? Math.max(1, Number(i.system?.packSize) || 1) : null
+        };
         return {
           id: i.id,
           name: i.name,
@@ -638,8 +609,7 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
           flavor: i.system?.flavor || "",
           price: cost,
           weight: i.system?.weight || 0,
-          quantity: qty,
-          stackable,
+          quantity,
           isOption: isOption(i),
           field1: fields.field1,
           field2: fields.field2,
@@ -678,9 +648,9 @@ export class CyberpunkShopSheet extends HandlebarsApplicationMixin(ActorSheetV2B
       }
     });
 
-    // Stackable quantity input (unlocked mode). `data-edit-as` switches between
-    // raw dose count (drugs) and pack count (ammo); for packs we multiply by
-    // packSize on commit so the stored quantity stays in rounds.
+    // Quantity column input (unlocked mode). `data-edit-as` switches between a
+    // plain count (doses / items) and a pack count (ammo); for packs we
+    // multiply by packSize on commit so the stored quantity stays in rounds.
     html.find('.gear-quantity-input').click(ev => ev.target.select()).change(async ev => {
       const itemId = ev.currentTarget.dataset.itemId;
       const editAs = ev.currentTarget.dataset.editAs;

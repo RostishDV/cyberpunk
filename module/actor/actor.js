@@ -1,6 +1,6 @@
 import { buildD10Roll, RollBundle } from "../dice.js";
 import { SortModes } from "./skill-sort.js";
-import { bodyTypeModifier, isCyberlimbBase, isCyberlimbOption, isSensorOption, isBooleanProperty, isNetBonusProperty, isStateProperty, cumulativeEffects } from "../lookups.js";
+import { bodyTypeModifier, isCyberlimbBase, isCyberlimbOption, isSensorOption, isBooleanProperty, isStateProperty, effectiveBonusOp, PER_LIMB_MAX_PROPERTIES, perLimbFactor, cumulativeEffects } from "../lookups.js";
 import { toTitleCase, localize, stackArmorSP, buildHitLocationIndex } from "../utils.js"
 import { HealDialog } from "../dialog/heal-dialog.js"
 import { WOUND_CONDITION_IDS, WOUND_STATE_TO_CONDITION, FATIGUE_CONDITION_IDS, FATIGUE_LEVEL_TO_CONDITION, FATIGUE_PENALTIES, STRESS_CONDITION_IDS, STRESS_LEVEL_TO_CONDITION, STRESS_COOL_PENALTIES, STRESS_GENERAL_PENALTIES, COVER_TYPES, COVER_CONDITION_IDS, COVER_KEY_TO_CONDITION, SLEEP_CONDITION_IDS, SLEEP_LEVEL_TO_CONDITION, SLEEP_SKILL_PENALTIES } from "../conditions.js"
@@ -204,6 +204,7 @@ export class CyberpunkActor extends Actor {
     // Initialize unarmed combat properties BEFORE applying bonuses
     system.unarmedBaseDamage = "1d3";
     system.unarmedDamageMultiplier = 1;
+    system.kickDamageMultiplier = 1;
 
     // Apply bonuses from equipped tools, drugs, cyberware, and armor.
     // Cyberware and armor options apply when their PARENT (the cyberware/armor
@@ -272,24 +273,33 @@ export class CyberpunkActor extends Actor {
     // presence-only: any single bonus row for them collapses to an
     // implicit `= 1`, no scaling. Stored op / value are ignored so
     // legacy rows with weird ops (× 2, etc.) don't break the semantics.
-    const pushBonus = (bonus, source) => {
+    const pushBonus = (bonus, source, limb = null) => {
       if (bonus.type !== "property" || !bonus.property) return;
       if (isBooleanProperty(bonus.property)) {
         pushOp(bucketFor(bonus.property), "=", { value: 1, source });
         return;
       }
-      let op = bonus.op || "+";
-      // NET Bonuses and State bonuses are additive-only — any legacy
-      // `×` / `÷` / `=` op saved on a row before the restriction lands
-      // as a plain "+" instead of skewing the stat with unintended
-      // scaling. Clamping at 0 happens later, per-target.
-      const restricted = isNetBonusProperty(bonus.property) || isStateProperty(bonus.property);
-      if (restricted && op !== "+" && op !== "−") op = "+";
+      // A saved op outside the property's allowed set (NET / State bonuses
+      // are add / subtract only; the Melee Damage Multiplier is × / ÷ only)
+      // reads as the set's first op instead of skewing the target.
+      // Clamping at 0 happens later, per-target.
+      const op = effectiveBonusOp(bonus.property, bonus.op);
       const value = Number(bonus.value) || 0;
-      pushOp(bucketFor(bonus.property), op, { value, source });
+      pushOp(bucketFor(bonus.property), op, { value, source, limb });
+    };
+    // Which cyberlimb (if any) an item's bonuses belong to — the limb
+    // itself, or the base an option is attached to — as `{ id, kind }`
+    // with kind "arm" / "leg". Feeds the per-limb combine for
+    // PER_LIMB_MAX_PROPERTIES; null everywhere else.
+    const limbOf = (item) => {
+      const base = isCyberlimbBase(item) ? item
+        : isCyberlimbOption(item) ? this.items.get(item.getFlag("cyberpunk", "attachedTo"))
+        : null;
+      return base ? { id: base.id, kind: base.system.cyberwareSubtype } : null;
     };
     equippedWithBonuses.forEach(item => {
-      for (const bonus of (item.system.bonuses || [])) pushBonus(bonus, item.name);
+      const limb = limbOf(item);
+      for (const bonus of (item.system.bonuses || [])) pushBonus(bonus, item.name, limb);
     });
 
     // Drug + Netware ActiveEffects — one walk covers both. Reads the
@@ -351,8 +361,20 @@ export class CyberpunkActor extends Actor {
 
       for (const a of ops.add) current += a.value;
       for (const s of ops.sub) current -= s.value;
-      for (const m of ops.mul) current *= m.value;
-      for (const d of ops.div) if (d.value !== 0) current /= d.value;
+      const limbTargets = PER_LIMB_MAX_PROPERTIES[path];
+      if (limbTargets) {
+        // Arms resolve into this path; each other limb kind writes its
+        // own key (legs → kickDamageMultiplier) from the same base.
+        const base = current;
+        for (const [kind, key] of Object.entries(limbTargets)) {
+          const value = base * perLimbFactor(ops.mul, ops.div, kind);
+          if (key === path) current = value;
+          else system[key] = value;
+        }
+      } else {
+        for (const m of ops.mul) current *= m.value;
+        for (const d of ops.div) if (d.value !== 0) current /= d.value;
+      }
       if (ops.set.length) {
         if (ops.set.length > 1) {
           console.warn(`CYBERPUNK | multiple "=" bonuses on ${path}; using last (${ops.set[ops.set.length - 1].value})`);
@@ -1552,6 +1574,33 @@ export class CyberpunkActor extends Actor {
   }
 
   /**
+   * Resolve a chip-only ("virtual") skill row id — a skill the character
+   * doesn't own but can use through equipped chipware.
+   * @param {string} virtualId - Format: "virtual-{chipwareId}-{skillName}"
+   * @returns {{chipware: Item, bonus: object, name: string, stat: string}|null}
+   *          null when the id isn't a virtual one, or the chip / bonus is gone.
+   */
+  resolveVirtualSkill(virtualId) {
+    if (!String(virtualId ?? "").startsWith("virtual-")) return null;
+    const parts = String(virtualId).split('-');
+    const chipwareId = parts[1];
+    // Skill names may contain dashes; the chipware id never does.
+    const name = parts.slice(2).join('-');
+
+    const chipware = this.items.get(chipwareId);
+    if (!chipware) {
+      console.warn(`CyberpunkActor: Chipware ${chipwareId} not found for virtual skill`);
+      return null;
+    }
+    const bonus = chipware.system.bonuses?.find(b => b.type === "skill" && b.skillName === name);
+    if (!bonus) {
+      console.warn(`CyberpunkActor: Skill bonus for ${name} not found in chipware`);
+      return null;
+    }
+    return { chipware, bonus, name, stat: bonus.skillStat || 'ref' };
+  }
+
+  /**
    * Roll a virtual skill from equipped chipware
    * Virtual skills are skills the character doesn't own but can use via chipware
    * @param {string}  virtualId - Format: "virtual-{chipwareId}-{skillName}"
@@ -1560,28 +1609,9 @@ export class CyberpunkActor extends Actor {
    * @param {boolean} disadvantage
    */
   async _rollVirtualSkill(virtualId, extraMod = 0, advantage = false, disadvantage = false) {
-    // Parse virtualId: "virtual-{chipwareId}-{skillName}"
-    const parts = virtualId.split('-');
-    const chipwareId = parts[1];
-    const skillName = parts.slice(2).join('-');
-
-    const chipware = this.items.get(chipwareId);
-    if (!chipware) {
-      console.warn(`CyberpunkActor: Chipware ${chipwareId} not found for virtual skill`);
-      return;
-    }
-
-    // Find the skill bonus in chipware
-    const bonus = chipware.system.bonuses?.find(b =>
-      b.type === "skill" && b.skillName === skillName
-    );
-    if (!bonus) {
-      console.warn(`CyberpunkActor: Skill bonus for ${skillName} not found in chipware`);
-      return;
-    }
-
-    // Use stored stat or default to ref
-    const stat = bonus.skillStat || 'ref';
+    const resolved = this.resolveVirtualSkill(virtualId);
+    if (!resolved) return;
+    const { name: skillName, stat } = resolved;
 
     // Action Surge: -3 penalty on all skill rolls
     const actionSurgePenalty = this.statuses.has("action-surge") ? -3 : 0;
@@ -1833,19 +1863,9 @@ export class CyberpunkActor extends Actor {
    * @param {number} extraMod - Additional modifier
    */
   async _rollVirtualSkillCheck(virtualId, difficulty, extraMod = 0) {
-    const parts = virtualId.split('-');
-    const chipwareId = parts[1];
-    const skillName = parts.slice(2).join('-');
-
-    const chipware = this.items.get(chipwareId);
-    if (!chipware) return;
-
-    const bonus = chipware.system.bonuses?.find(b =>
-      b.type === "skill" && b.skillName === skillName
-    );
-    if (!bonus) return;
-
-    const stat = bonus.skillStat || 'ref';
+    const resolved = this.resolveVirtualSkill(virtualId);
+    if (!resolved) return;
+    const { name: skillName, stat } = resolved;
     const actionSurgePenalty = this.statuses.has("action-surge") ? -3 : 0;
     const monomaniaPenalty = (this.system.psychosis?.obsession ?? 0) >= 51 ? -4 : 0;
     const fastDrawPenalty = this.statuses.has("fast-draw") ? -3 : 0;

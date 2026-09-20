@@ -1,4 +1,4 @@
-import { weaponTypes, rangedAttackTypes, meleeAttackTypes, fireModes, ranges, rangeDCs, rangeResolve, getAttackSkillsForWeapon, getWeaponClasses, martialActions, meleeDamageBonus, weaponEffects, resolveWeaponDiscriminator } from "../lookups.js"
+import { weaponTypes, rangedAttackTypes, meleeAttackTypes, fireModes, ranges, rangeDCs, rangeResolve, getAttackSkillsForWeapon, getWeaponClasses, martialActions, meleeDamageBonus, scaleMeleeDamage, weaponEffects, resolveWeaponDiscriminator } from "../lookups.js"
 import { getDamageForCaliber } from "../calibers.js"
 import { RollBundle, buildD10Roll }  from "../dice.js"
 import { clamp, getByPath, localize, rollLocation } from "../utils.js"
@@ -187,6 +187,31 @@ export class CyberpunkItem extends Item {
   }
 
   /**
+   * Weapon Options currently attached to this weapon, keyed by
+   * `optionType`. One per type by design — attach validation enforces
+   * uniqueness. Returns a plain map with entries only for option types
+   * actually present; missing keys return undefined (safe to spread).
+   */
+  _getAttachedOptions() {
+    if (!this.actor) return {};
+    const map = {};
+    for (const it of this.actor.itemTypes.weapon ?? []) {
+      if (it.system?.weaponType !== "Option") continue;
+      if (it.system?.attachedTo !== this.id) continue;
+      const t = it.system?.optionType;
+      if (!t || map[t]) continue;
+      map[t] = it;
+    }
+    return map;
+  }
+
+  /** Numeric value of one attached option, or 0 if not attached. */
+  _optionValue(type) {
+    const opt = this._getAttachedOptions()[type];
+    return opt ? (Number(opt.system?.optionValue) || 0) : 0;
+  }
+
+  /**
    * Effective damage formula. For Ranged with attached ammo, comes from ammo;
    * otherwise from the weapon itself. When the stored `damage` field is empty
    * but a caliber is set (common shape for compendium-sourced weapons that
@@ -196,20 +221,107 @@ export class CyberpunkItem extends Item {
    * here means compendium drops don't need a "change & change back" dance.
    */
   _getEffectiveDamage() {
+    let base;
     if (this._getWeaponType() === "Ranged") {
       const ammo = this._getAttachedAmmo();
-      if (ammo?.system?.damage) return ammo.system.damage;
+      if (ammo?.system?.damage) base = ammo.system.damage;
       // Ammo carries its own damage; if missing but caliber known, resolve.
-      if (ammo) {
+      else if (ammo) {
         const ammoCalDmg = getDamageForCaliber(ammo.system?.caliber);
-        if (ammoCalDmg) return ammoCalDmg;
+        if (ammoCalDmg) base = ammoCalDmg;
       }
     }
-    const wd = this.weaponData;
-    if (wd?.damage) return wd.damage;
-    const calDmg = getDamageForCaliber(wd?.caliber);
-    if (calDmg) return calDmg;
-    return "0";
+    if (base === undefined) {
+      const wd = this.weaponData;
+      if (wd?.damage) base = wd.damage;
+      else {
+        const calDmg = getDamageForCaliber(wd?.caliber);
+        base = calDmg || "0";
+      }
+    }
+    // Damage-option bonus — appended to the resolved formula regardless
+    // of whether the base came from the weapon or its ammo. A +3 damage
+    // option is a +3 damage weapon in the character's hands.
+    const bonus = this._optionValue("damage");
+    if (!bonus) return base;
+    return bonus > 0 ? `${base}+${bonus}` : `${base}${bonus}`;
+  }
+
+  /** Effective range in metres — weapon range plus range option bonus. */
+  _getEffectiveRange() {
+    return (Number(this.weaponData?.range) || 0) + this._optionValue("range");
+  }
+
+  /** Effective accuracy — weapon accuracy plus accuracy option bonus. */
+  _getEffectiveAccuracy() {
+    return (Number(this.weaponData?.accuracy) || 0) + this._optionValue("accuracy");
+  }
+
+  /** Effective magazine capacity (`shots`). Bonus does NOT affect the
+   *  currently-loaded count (`shotsLeft`) — the character has to
+   *  reload to fill the extra capacity. */
+  _getEffectiveShots() {
+    return (Number(this.weaponData?.shots) || 0) + this._optionValue("magazine");
+  }
+
+  /** Effective charge capacity (`chargesMax`) — same relationship
+   *  between capacity and currently-loaded as `_getEffectiveShots`. */
+  _getEffectiveChargesMax() {
+    return (Number(this.weaponData?.chargesMax) || 0) + this._optionValue("magazine");
+  }
+
+  /** Effective rate of fire. */
+  _getEffectiveRof() {
+    return Math.max(1, (Number(this.weaponData?.rof) || 1) + this._optionValue("rof"));
+  }
+
+  /** Effective minimum-body requirement. Minimum-body option
+   *  DEDUCTS the value per the house-rule (a +2 minBody option
+   *  lowers the requirement by 2). */
+  _getEffectiveMinBody() {
+    return Math.max(0, (Number(this.weaponData?.minimumBody) || 0) - this._optionValue("minBody"));
+  }
+
+  /** Effective caliber — swap-option overrides the weapon's own
+   *  caliber when attached. Ranged-only concept; other types return
+   *  the raw value. */
+  _getEffectiveCaliber() {
+    const opt = this._getAttachedOptions().caliber;
+    if (opt?.system?.caliber) return opt.system.caliber;
+    return this.weaponData?.caliber || "";
+  }
+
+  /** Effective damage type — swap-option overrides the weapon's own
+   *  damage type. Martial-only concept in the sheet, but the reader
+   *  stays type-agnostic. */
+  _getEffectiveDamageType() {
+    const opt = this._getAttachedOptions().damageType;
+    if (opt?.system?.damageType) return opt.system.damageType;
+    return this.weaponData?.damageType || "";
+  }
+
+  /**
+   * A shallow-cloned `weaponData` shape with every Option-modifiable
+   * field pre-resolved. Fire paths read once via this helper instead
+   * of scattering `_getEffective*` calls across every stat read; the
+   * resolvers themselves must keep reading raw `weaponData` to
+   * compute the effective value. Damage stays raw here — it needs
+   * ammo-aware resolution which lives in `_getEffectiveDamage()`.
+   */
+  _resolvedWeaponData() {
+    const raw = this.weaponData;
+    if (!raw) return {};
+    return {
+      ...raw,
+      range:       this._getEffectiveRange(),
+      accuracy:    this._getEffectiveAccuracy(),
+      rof:         this._getEffectiveRof(),
+      shots:       this._getEffectiveShots(),
+      chargesMax:  this._getEffectiveChargesMax(),
+      minimumBody: this._getEffectiveMinBody(),
+      caliber:     this._getEffectiveCaliber(),
+      damageType:  this._getEffectiveDamageType()
+    };
   }
 
   /**
@@ -338,8 +450,10 @@ export class CyberpunkItem extends Item {
   async _attachAmmo(ammoItem) {
     if (!this.actor || !ammoItem) return;
     if (this._getWeaponType() !== "Ranged") return;
-    // Caliber check — weapon and ammo must share the same caliber slug
-    const wCal = this.weaponData?.caliber;
+    // Caliber check — weapon and ammo must share the same caliber slug.
+    // Uses the effective caliber so a caliber-swap Option is honoured
+    // (weapon swapped to Heavy only accepts Heavy ammo).
+    const wCal = this._getEffectiveCaliber();
     const aCal = ammoItem.system?.caliber;
     if (wCal && aCal && wCal !== aCal) {
       ui.notifications?.warn(localize("AmmoIncompatibleCaliber"));
@@ -382,6 +496,50 @@ export class CyberpunkItem extends Item {
       [this._weaponUpdatePath("attachedAmmoId")]: "",
       [this._weaponUpdatePath("shotsLeft")]: 0
     });
+  }
+
+  /**
+   * Attach a Weapon Option to this weapon. Validates:
+   *   - both items live on the same actor
+   *   - the target is a fire-able weapon (not itself an Option / Ammo)
+   *   - only one option of each `optionType` per weapon
+   * Sets `system.attachedTo` on the option to this weapon's id.
+   */
+  async _attachOption(optionItem) {
+    if (!this.actor || !optionItem) return false;
+    if (optionItem.parent?.id !== this.actor.id) return false;
+    if (optionItem.system?.weaponType !== "Option") return false;
+    const t = this._getWeaponType();
+    if (!t || t === "Option" || t === "Ammo") {
+      ui.notifications?.warn(localize("OptionOnlyOnWeapon"));
+      return false;
+    }
+    const optType = optionItem.system?.optionType;
+    if (!optType) return false;
+    // One-per-type check — swap-options overwrite by design (change
+    // the caliber-swap Option to a different caliber → just re-drop
+    // the same option), so we only block DIFFERENT items of the same
+    // type from stacking.
+    const dup = this.actor.itemTypes.weapon.find(w =>
+      w.id !== optionItem.id
+      && w.system?.weaponType === "Option"
+      && w.system?.optionType === optType
+      && w.system?.attachedTo === this.id
+    );
+    if (dup) {
+      ui.notifications?.warn(localize("OptionOneOfType"));
+      return false;
+    }
+    await optionItem.update({ "system.attachedTo": this.id });
+    return true;
+  }
+
+  /** Clear the `attachedTo` field on an option currently attached to
+   *  this weapon (no-op if unattached or attached elsewhere). */
+  async _detachOption(optionItem) {
+    if (!optionItem || optionItem.system?.attachedTo !== this.id) return false;
+    await optionItem.update({ "system.attachedTo": "" });
+    return true;
   }
 
   /**
@@ -428,7 +586,7 @@ export class CyberpunkItem extends Item {
    * Calculate Minimum Body penalty for this weapon.
    */
   _getMinBodyPenalty() {
-    const minBody = this.weaponData.minimumBody || 0;
+    const minBody = this._getEffectiveMinBody();
     if (!minBody || !this.actor) return { accuracyPenalty: 0, rofMultiplier: 1 };
     const body = this.actor.system.stats?.bt?.total || 0;
     const deficit = minBody - body;
@@ -526,7 +684,7 @@ export class CyberpunkItem extends Item {
 
     if(fireMode === fireModes.fullAuto) {
       const ammoLeft = Number(this.weaponData[this._getAmmoField()]) || 0;
-      let bullets = Math.min(ammoLeft, this.weaponData.rof);
+      let bullets = Math.min(ammoLeft, this._getEffectiveRof());
       let multiplier =
           (range === ranges.close) ? 1
         : (range === ranges.pointBlank) ? 0
@@ -612,7 +770,7 @@ export class CyberpunkItem extends Item {
       console.error(`${this.name} is not a weapon, and therefore has no fire modes`)
       return [];
     }
-    const wd = this.weaponData;
+    const wd = this._resolvedWeaponData();
     const wType = this._getWeaponType();
     // Martial / Ordnance / Ammo: single only
     if (wType !== "Ranged" && wType !== "Exotic") return [fireModes.singleShot];
@@ -665,7 +823,7 @@ export class CyberpunkItem extends Item {
 
   // Roll just the attack roll of a weapon, return it
   async rollToHit(attackMods) {
-    const wd = this.weaponData;
+    const wd = this._resolvedWeaponData();
     let isRanged = this.isRanged();
 
     // Blinded attackers use LUCK instead of REF for all attacks
@@ -709,7 +867,7 @@ export class CyberpunkItem extends Item {
    * Fire an automatic weapon at full auto
    */
   async _fireFullAuto(attackMods, targetTokens) {
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const resolvedSkill = this._resolveAttackSkill();
       const damageFormula = this._getEffectiveDamage();
       const ammoTypeKey = this._getEffectiveAmmoType();
@@ -824,7 +982,7 @@ export class CyberpunkItem extends Item {
   }
 
   async _fireBurst(attackMods, maxRounds = 3) {
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const resolvedSkill = this._resolveAttackSkill();
       const damageFormula = this._getEffectiveDamage();
       const ammoTypeKey = this._getEffectiveAmmoType();
@@ -841,11 +999,12 @@ export class CyberpunkItem extends Item {
           ? await this.actor.rollFumbleData(wd.reliability)
           : null;
 
-      const minBodyPenalty = this._getMinBodyPenalty();
-      const effectiveRof = Math.max(1, Math.floor(wd.rof * minBodyPenalty.rofMultiplier));
+      // A burst is a fixed round count (2 or 3), not a RoF allowance — it
+      // fires in full whenever the magazine allows. The Minimum BODY
+      // penalty still costs accuracy and still halves full auto.
       const ammoField = this._getAmmoField();
       const ammoLeft = Number(wd[ammoField]) || 0;
-      let roundsFired = Math.min(ammoLeft, effectiveRof, maxRounds);
+      let roundsFired = Math.min(ammoLeft, maxRounds);
       let attackHits = attackRoll.total >= DC && !isNatural1;
 
       let ipGained = 0;
@@ -924,7 +1083,7 @@ export class CyberpunkItem extends Item {
   }
 
   async _fireSingle(attackMods) {
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const resolvedSkill = this._resolveAttackSkill();
       const damageFormula = this._getEffectiveDamage();
       const ammoTypeKey = this._getEffectiveAmmoType();
@@ -1040,7 +1199,7 @@ export class CyberpunkItem extends Item {
    * deduct charges instead.
    */
   async _fireAreaWeapon(attackMods, targetTokens = []) {
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const t = this._getWeaponType();
 
       const damageFormula = this._getEffectiveDamage();
@@ -1355,7 +1514,7 @@ export class CyberpunkItem extends Item {
    * @returns {string} e.g., "Assault Rifle", "Exotic · Confusion", "Melee · Edged", "Ordnance · Burning"
    */
   getWeaponLineType() {
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const t = this._getWeaponType();
       const c = this._getWeaponClass();
 
@@ -1425,7 +1584,7 @@ export class CyberpunkItem extends Item {
           ? await this.actor.rollFumbleData(this.weaponData.reliability)
           : null;
 
-      const wd = this.weaponData;
+      const wd = this._resolvedWeaponData();
       const resolvedSkill = this._resolveAttackSkill();
       let ipGained = 0;
       if (!isNatural1 && this.actor) {
@@ -1441,11 +1600,14 @@ export class CyberpunkItem extends Item {
           }
       }
 
+      // Melee Damage Multiplier scales the weapon's own damage (not the
+      // BODY / martial-skill bonuses added below), same as unarmed hits.
+      const weaponDamage = scaleMeleeDamage(wd.damage, this.actor.system.unarmedDamageMultiplier).roll;
       // Monoblade critical: natural 10 doubles base weapon damage
       const isNatural10 = attackRoll.dice[0]?.results?.[0]?.result === 10;
       const baseDamage = (wd.damageType === "monoblade" && isNatural10)
-          ? `(${wd.damage})*2`
-          : wd.damage;
+          ? `(${weaponDamage})*2`
+          : weaponDamage;
 
       let damageFormula = `${baseDamage}+@strengthBonus`;
       if (martialDamageBonus > 0) damageFormula += '+@martialDamageBonus';
@@ -1498,7 +1660,7 @@ export class CyberpunkItem extends Item {
           weaponImage: this.img,
           weaponType: this.getWeaponLineType(),
           loadedAmmoType: "standard",
-          damageType: this.weaponData.damageType || "",
+          damageType: this._getEffectiveDamageType(),
           hitLocation: hitLocation,
           ipGained: ipGained,
           fumble
@@ -1541,11 +1703,17 @@ export class CyberpunkItem extends Item {
 
     let damageFormula = "";
 
+    // Base dice scale with the Melee Damage Multiplier — the legs' for
+    // kicks, the arms' for everything else; BODY and martial skill bonuses
+    // stay flat.
+    const meleeMult = action == martialActions.kick
+      ? this.actor?.system?.kickDamageMultiplier
+      : this.actor?.system?.unarmedDamageMultiplier;
     if(action == martialActions.strike) {
-      damageFormula = "1d3+@strengthBonus+@martialDamageBonus";
+      damageFormula = `${scaleMeleeDamage("1d3", meleeMult).roll}+@strengthBonus+@martialDamageBonus`;
     }
     else if([martialActions.kick, martialActions.throw, martialActions.choke].includes(action)) {
-      damageFormula = "1d6+@strengthBonus+@martialDamageBonus";
+      damageFormula = `${scaleMeleeDamage("1d6", meleeMult).roll}+@strengthBonus+@martialDamageBonus`;
     }
 
     if (damageFormula !== "" && attackMods.cyberTerminus) {

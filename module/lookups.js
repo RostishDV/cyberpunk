@@ -15,13 +15,14 @@ import { calibers, CALIBERS_BY_AMMO_CLASS } from './calibers.js';
 // Each weapon also has a `weaponClass` field — the subclass within its category.
 // ============================================================================
 
-/** Top-level weaponType discriminator (5 categories). */
+/** Top-level weaponType discriminator (6 categories). */
 export const weaponTypes = {
     Martial:  "WeaponTypeMartial",
     Ranged:   "WeaponTypeRanged",
     Exotic:   "WeaponTypeExotic",
     Ordnance: "WeaponTypeOrdnance",
-    Ammo:     "WeaponTypeAmmo"
+    Ammo:     "WeaponTypeAmmo",
+    Option:   "WeaponTypeOption"
 };
 
 /**
@@ -133,13 +134,44 @@ export const ammoClasses = {
     Crossbow: "AmmoCrossbow"
 };
 
+/** Weapon Option — the option carries the modification; the actual
+ *  category shows in the Option Type dropdown, not in weaponClass.
+ *  Flat single-class enum keeps the shared sheet chrome happy. */
+export const optionClasses = {
+    Option: "OptionOption"
+};
+
+/**
+ * Weapon Option types — one option per type per weapon. Additive
+ * numeric options carry `value`; the two "swap" variants (Caliber,
+ * DamageType) reuse the existing `caliber` / `damageType` fields as
+ * the swap target and ignore `value`.
+ */
+export const weaponOptionTypes = {
+    range:      "OptionTypeRange",
+    accuracy:   "OptionTypeAccuracy",
+    magazine:   "OptionTypeMagazine",
+    rof:        "OptionTypeRateOfFire",
+    damage:     "OptionTypeDamage",
+    minBody:    "OptionTypeMinBody",
+    caliber:    "OptionTypeCaliber",
+    damageType: "OptionTypeDamageType"
+};
+
+/** Option types that carry a numeric `value` bonus (as opposed to a
+ *  swap target). */
+export const NUMERIC_OPTION_TYPES = new Set([
+    "range", "accuracy", "magazine", "rof", "damage", "minBody"
+]);
+
 /** weaponClass lookup, keyed by weaponType. */
 export const WEAPON_CLASSES = {
     Martial:  martialClasses,
     Ranged:   rangedClasses,
     Exotic:   exoticClasses,
     Ordnance: ordnanceClasses,
-    Ammo:     ammoClasses
+    Ammo:     ammoClasses,
+    Option:   optionClasses
 };
 
 /**
@@ -388,12 +420,22 @@ export const toolModifierProperties = {
     "deathSaveMod":            "PropDeathSave",
     "poisonSaveMod":           "PropPoisonSave",
     "rangedAttackBonus":       "PropRangedAttackBonus",
+    // Melee Damage Multiplier — the storage key predates the rename (saved
+    // bonus rows reference it). Scales unarmed, martial-arts and melee
+    // weapon damage; ops locked to × / ÷ (see PROPERTY_ALLOWED_OPS); the
+    // strongest cyberarm wins rather than stacking, and cyberlegs feed the
+    // separate kick multiplier (PER_LIMB_MAX_PROPERTIES).
     "unarmedDamageMultiplier": "PropUnarmedMultiplier",
     "healingRateBoost":        "PropHealingRateBoost",
     "stabilizeBonus":          "PropStabilizeBonus",
     "sleepRollBonus":          "PropSleepRollBonus",
     "allRollBonus":            "PropAllRollBonus",
-    "bonusActions":            "PropBonusActions"
+    "bonusActions":            "PropBonusActions",
+    // Same underlying property as the netware NET-Bonus entry — added
+    // here so drugs / tools can author NET Actions delta via the
+    // standard Modifier picker (mirrors the netware NET Bonus of the
+    // same name).
+    "netBonuses.actions":      "PropNetBonusActions"
 };
 
 /**
@@ -458,6 +500,78 @@ export function isBooleanProperty(key) {
 /** True if a key is a numeric Modifier (uses op / value UI). */
 export function isModifierProperty(key) {
     return Object.prototype.hasOwnProperty.call(toolModifierProperties, key);
+}
+
+/**
+ * Properties whose bonus op is narrower than their category's default. The
+ * first entry is what a disallowed (legacy) op on a saved row is read as.
+ */
+const PROPERTY_ALLOWED_OPS = {
+    unarmedDamageMultiplier: ["×", "÷"]
+};
+
+/**
+ * Ops a bonus row targeting `key` may use: an explicit restriction above,
+ * else add / subtract for NET and State bonuses (never scaled or
+ * overridden), else the full set.
+ */
+export function allowedOpsForProperty(key) {
+    if (PROPERTY_ALLOWED_OPS[key]) return PROPERTY_ALLOWED_OPS[key];
+    if (isNetBonusProperty(key) || isStateProperty(key)) return ["+", "−"];
+    return ["+", "−", "×", "÷", "="];
+}
+
+/**
+ * The op a saved bonus row actually applies. A stored op outside the
+ * property's allowed set reads as the set's first entry, so the Effect tab,
+ * item subtexts and the stat pipeline all agree.
+ */
+export function effectiveBonusOp(key, op) {
+    const allowed = allowedOpsForProperty(key);
+    const stored = op || "+";
+    return allowed.includes(stored) ? stored : allowed[0];
+}
+
+/**
+ * Properties whose × / ÷ bonuses combine per cyberlimb instead of all
+ * together: each limb's own bonuses (the limb plus the options attached to
+ * it) multiply into that limb's factor and only the strongest limb counts.
+ * Two cyberarms each at ×6 give ×6, not ×36. Arms and legs resolve
+ * separately — the value maps limb kind → the actor `system` key it feeds:
+ * arms drive punches, grapples and melee weapons (the property itself),
+ * legs drive kicks. Bonuses from anything outside a limb — drugs, tools,
+ * other cyberware — scale both.
+ */
+export const PER_LIMB_MAX_PROPERTIES = {
+    unarmedDamageMultiplier: { arm: "unarmedDamageMultiplier", leg: "kickDamageMultiplier" }
+};
+
+/**
+ * Combined × / ÷ factor for a PER_LIMB_MAX_PROPERTIES target, for one limb
+ * kind ("arm" / "leg"). Entries are `{ value, limb }` where `limb` is
+ * `{ id, kind }` or null: entries sharing a limb id multiply into that limb's
+ * factor and the strongest limb of `kind` wins; limbs of the other kind are
+ * ignored; entries without a limb scale on top. Division by 0 is skipped.
+ */
+export function perLimbFactor(mul = [], div = [], kind) {
+    const factor = (muls, divs) => {
+        let f = 1;
+        for (const e of muls) f *= e.value;
+        for (const e of divs) if (e.value !== 0) f /= e.value;
+        return f;
+    };
+    const limbs = new Map();
+    const shared = { mul: [], div: [] };
+    const groupFor = (limb) => {
+        if (!limb) return shared;
+        if (limb.kind !== kind) return null;
+        if (!limbs.has(limb.id)) limbs.set(limb.id, { mul: [], div: [] });
+        return limbs.get(limb.id);
+    };
+    for (const e of mul) groupFor(e.limb)?.mul.push(e);
+    for (const e of div) groupFor(e.limb)?.div.push(e);
+    const limbFactors = [...limbs.values()].map(g => factor(g.mul, g.div));
+    return factor(shared.mul, shared.div) * (limbFactors.length ? Math.max(...limbFactors) : 1);
 }
 
 /** True if a key is a State bonus (Stress / Fright / Fatigue / HL flavours). */
@@ -1434,6 +1548,31 @@ export function meleeDamageBonus(bt) {
     if (bt <= 12) return 4;
     if (bt <= 14) return 6;
     return 8;
+}
+
+/**
+ * Apply the Melee Damage Multiplier (stored as `unarmedDamageMultiplier`) to
+ * a base damage formula — unarmed hits, martial-arts actions and melee
+ * weapons alike. BODY and martial-skill bonuses are added after, unscaled.
+ * A plain `XdY` scales its dice count (1d6 ×2 → 2d6) whenever that stays a
+ * whole number of dice; anything else scales the rolled total. Returns the
+ * roll formula and a display string for sheets and chat.
+ */
+export function scaleMeleeDamage(formula, multiplier) {
+    const base = String(formula ?? "").trim();
+    const mult = Number(multiplier);
+    if (!base || !(mult > 0) || mult === 1) return { roll: base, display: base };
+    const dice = base.match(/^(\d+)d(\d+)$/);
+    const count = dice ? Number(dice[1]) * mult : NaN;
+    if (Number.isInteger(count) && count >= 1) {
+        const scaled = `${count}d${dice[2]}`;
+        return { roll: scaled, display: scaled };
+    }
+    const opText = mult > 1 ? `×${mult}` : `÷${Math.round((1 / mult) * 100) / 100}`;
+    return {
+        roll: Number.isInteger(mult) ? `(${base})*${mult}` : `floor((${base})*${mult})`,
+        display: `(${base})${opText}`
+    };
 }
 
 // ============================================================================

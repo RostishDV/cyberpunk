@@ -132,41 +132,39 @@
                       <img src="systems/cyberpunk/img/ui/badge-weight.svg" alt="kg">
                     </div>
 
-                    {{!-- Field 1 (Damage / SP / Humanity / Slots / Pack ...) --}}
+                    {{!-- Field 1 (Damage / SP / Humanity / Slots / Pack) --}}
                     {{#if row.field1}}
                       <div class="gear-field" style="width: 60px;">
-                        {{#if row.field1.editable}}
-                          <input type="number" class="zone-input gear-quantity-input"
-                                 data-item-id="{{row.id}}"
-                                 data-edit-as="{{row.field1.editAs}}"
-                                 {{#if row.field1.packSize}}data-pack-size="{{row.field1.packSize}}"{{/if}}
-                                 value="{{row.field1.value}}" min="0">
-                        {{else}}
-                          <span class="field-top">{{row.field1.value}}</span>
-                        {{/if}}
+                        <span class="field-top">{{row.field1.value}}</span>
                         <span class="field-bottom">{{row.field1.label}}</span>
                       </div>
                     {{else}}
                       <div class="gear-field" style="width: 60px;"></div>
                     {{/if}}
 
-                    {{!-- Field 2 (Magazine / Charges / EV / Spaces / Options) --}}
+                    {{!-- Field 2 (Magazine / Charges / EV / Spaces / SDP) --}}
                     {{#if row.field2}}
                       <div class="gear-field" style="width: 60px;">
-                        {{#if row.field2.editable}}
-                          <input type="number" class="zone-input gear-quantity-input"
-                                 data-item-id="{{row.id}}"
-                                 data-edit-as="{{row.field2.editAs}}"
-                                 {{#if row.field2.packSize}}data-pack-size="{{row.field2.packSize}}"{{/if}}
-                                 value="{{row.field2.value}}" min="0">
-                        {{else}}
-                          <span class="field-top">{{row.field2.value}}</span>
-                        {{/if}}
+                        <span class="field-top">{{row.field2.value}}</span>
                         <span class="field-bottom">{{row.field2.label}}</span>
                       </div>
                     {{else}}
                       <div class="gear-field" style="width: 60px;"></div>
                     {{/if}}
+
+                    {{!-- Quantity — every row; GM-editable in unlocked mode --}}
+                    <div class="gear-field" style="width: 60px;">
+                      {{#if row.quantity.editable}}
+                        <input type="number" class="zone-input gear-quantity-input"
+                               data-item-id="{{row.id}}"
+                               data-edit-as="{{row.quantity.editAs}}"
+                               {{#if row.quantity.packSize}}data-pack-size="{{row.quantity.packSize}}"{{/if}}
+                               value="{{row.quantity.value}}" min="0">
+                      {{else}}
+                        <span class="field-top">{{row.quantity.value}}</span>
+                      {{/if}}
+                      <span class="field-bottom">Quantity</span>
+                    </div>
 
                     {{!-- Action button (Buy / Sell) --}}
                     {{#if (eq cat.mode "buy")}}

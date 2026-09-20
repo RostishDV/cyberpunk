@@ -153,8 +153,11 @@
                 </div>
               {{/if}}
             </div>
+          {{else if isOption}}
+            {{!-- Option: no companion field. The Option Type / Value
+                 rows render further down in the Option branch. --}}
           {{else}}
-            {{!-- Non-Ammo: Attack Skill --}}
+            {{!-- Non-Ammo, non-Option: Attack Skill --}}
             <div class="variable-field">
               <label class="variable-label">{{localize "CYBERPUNK.AttackSkill"}}</label>
               {{#if isLocked}}
@@ -177,8 +180,11 @@
         </div>
 
         {{!-- Rows 2 + 3: Concealability + Range/WA, Reliability + Min Body --}}
-        {{!-- Skipped entirely for Ammo --}}
-        {{#unless isAmmo}}
+        {{!-- Skipped entirely for Ammo AND Option — neither has its
+             own range / accuracy / reliability / concealability /
+             minimum-body concerns. The trailing weapon-divider is
+             inside the same gate so it disappears too. --}}
+        {{#unless (or isAmmo isOption)}}
           <div class="variables-row">
             {{!-- Concealability --}}
             <div class="variable-field">
@@ -644,6 +650,82 @@
             {{> "systems/cyberpunk/templates/item/parts/weapon-drug-slot.hbs"}}
           </div>
           {{/if}}
+        {{/if}}
+
+        {{!-- ============================================ --}}
+        {{!-- OPTION: Option Type; Value or Caliber/DmgType --}}
+        {{!-- ============================================ --}}
+        {{#if isOption}}
+          <div class="variables-row">
+            <div class="variable-field">
+              <label class="variable-label">{{localize "CYBERPUNK.OptionType"}}</label>
+              {{#if isLocked}}
+                <div class="dropdown">
+                  <span class="dropdown-text">{{selectedOptionTypeLabel}}</span>
+                  <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                </div>
+              {{else}}
+                <div class="dropdown-wrapper">
+                  <select class="dropdown-select" name="system.optionType">
+                    {{#each optionTypeOptions}}
+                      <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+                    {{/each}}
+                  </select>
+                  <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                </div>
+              {{/if}}
+            </div>
+            {{#if optionIsNumeric}}
+              <div class="variable-field">
+                <label class="variable-label">{{localize "CYBERPUNK.Value"}}</label>
+                {{#if isLocked}}
+                  <div class="dropdown"><span class="dropdown-text">{{system.optionValue}}</span></div>
+                {{else}}
+                  <input type="number" class="variable-input" name="system.optionValue" value="{{system.optionValue}}" step="1">
+                {{/if}}
+              </div>
+            {{/if}}
+            {{#if optionIsCaliberSwap}}
+              <div class="variable-field">
+                <label class="variable-label">{{localize "CYBERPUNK.Caliber"}}</label>
+                {{#if isLocked}}
+                  <div class="dropdown">
+                    <span class="dropdown-text">{{selectedCaliberLabel}}</span>
+                    <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                  </div>
+                {{else}}
+                  <div class="dropdown-wrapper">
+                    <select class="dropdown-select" name="system.caliber">
+                      {{#each caliberOptions}}
+                        <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+                      {{/each}}
+                    </select>
+                    <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                  </div>
+                {{/if}}
+              </div>
+            {{/if}}
+            {{#if optionIsDamageTypeSwap}}
+              <div class="variable-field">
+                <label class="variable-label">{{localize "CYBERPUNK.DamageType"}}</label>
+                {{#if isLocked}}
+                  <div class="dropdown">
+                    <span class="dropdown-text">{{selectedDamageTypeLabel}}</span>
+                    <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                  </div>
+                {{else}}
+                  <div class="dropdown-wrapper">
+                    <select class="dropdown-select" name="system.damageType">
+                      {{#each damageTypeOptions}}
+                        <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+                      {{/each}}
+                    </select>
+                    <div class="dropdown-chevron"><img src="systems/cyberpunk/img/ui/icon-down.svg" alt=""></div>
+                  </div>
+                {{/if}}
+              </div>
+            {{/if}}
+          </div>
         {{/if}}
 
       {{/if}}

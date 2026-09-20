@@ -5,9 +5,10 @@ import {
   ordnanceTemplateTypes,
   getAttackSkillsForWeapon,
   getRangedClassesForSkill,
-  resolveWeaponDiscriminator
+  resolveWeaponDiscriminator,
+  weaponOptionTypes, NUMERIC_OPTION_TYPES
 } from "../lookups.js";
-import { calibers as CALIBERS, getValidAmmoTypesForCaliber, getDamageForCaliber } from "../calibers.js";
+import { calibers as CALIBERS, getValidAmmoTypesForCaliber, getDamageForCaliber, getPackSizeForCaliber } from "../calibers.js";
 import { CyberpunkItemSheetV2 } from "./item-sheet-base-v2.js";
 import { localize } from "../utils.js";
 
@@ -22,7 +23,8 @@ const DEFAULT_CLASS_BY_TYPE = {
   Ranged:   "Pistol",
   Exotic:   "Exotic",
   Ordnance: "Grenade",
-  Ammo:     "Pistol"
+  Ammo:     "Pistol",
+  Option:   "Option"
 };
 
 /**
@@ -60,6 +62,7 @@ export class CyberpunkWeaponSheet extends CyberpunkItemSheetV2 {
     ctx.isExotic   = wt === "Exotic";
     ctx.isOrdnance = wt === "Ordnance";
     ctx.isAmmo     = wt === "Ammo";
+    ctx.isOption   = wt === "Option";
     ctx.showHeaderTriviaRows = !ctx.isAmmo;
 
     ctx.weaponTypeOptions = Object.entries(weaponTypes).map(([value, labelKey]) => ({
@@ -203,6 +206,44 @@ export class CyberpunkWeaponSheet extends CyberpunkItemSheetV2 {
       ctx.selectedAmmoTypeLabel = game.i18n.localize(`CYBERPUNK.${selAT}`);
     }
 
+    // Weapon Option — the extra rows on the Option sheet: type
+    // dropdown, value input, and either a caliber or damage-type
+    // dropdown for the two swap variants. Numeric option types share
+    // the same `optionValue` field; caliber / damageType swaps reuse
+    // the existing `caliber` and `damageType` fields on the schema.
+    if (ctx.isOption) {
+      const currentOptType = ctx.system.optionType || "range";
+      ctx.optionTypeOptions = Object.entries(weaponOptionTypes).map(([value, labelKey]) => ({
+        value,
+        label: game.i18n.localize(`CYBERPUNK.${labelKey}`),
+        selected: currentOptType === value
+      }));
+      ctx.selectedOptionTypeLabel = game.i18n.localize(`CYBERPUNK.${weaponOptionTypes[currentOptType] || "OptionTypeRange"}`);
+      ctx.optionIsNumeric = NUMERIC_OPTION_TYPES.has(currentOptType);
+      ctx.optionIsCaliberSwap = currentOptType === "caliber";
+      ctx.optionIsDamageTypeSwap = currentOptType === "damageType";
+      // Caliber dropdown used by both Ranged/Ammo above AND caliber-
+      // swap options — reuse the same shape so template stays uniform.
+      if (ctx.optionIsCaliberSwap && !ctx.caliberOptions) {
+        ctx.caliberOptions = Object.entries(CALIBERS).map(([value, labelKey]) => ({
+          value,
+          label: game.i18n.localize(`CYBERPUNK.${labelKey}`),
+          selected: ctx.system.caliber === value
+        }));
+        const selCal = CALIBERS[ctx.system.caliber];
+        ctx.selectedCaliberLabel = selCal ? game.i18n.localize(`CYBERPUNK.${selCal}`) : "";
+      }
+      if (ctx.optionIsDamageTypeSwap) {
+        ctx.damageTypeOptions = Object.entries(meleeDamageTypes).map(([value, labelKey]) => ({
+          value,
+          label: game.i18n.localize(`CYBERPUNK.${labelKey}`),
+          selected: ctx.system.damageType === value
+        }));
+        const selDT = meleeDamageTypes[ctx.system.damageType] || "DmgBlunt";
+        ctx.selectedDamageTypeLabel = game.i18n.localize(`CYBERPUNK.${selDT}`);
+      }
+    }
+
     // Drug-effect slot — visible only when the weapon's effect is
     // "drug". Resolves the attached drug (if any) synchronously so we
     // can render name + icon in the drop area.
@@ -274,6 +315,8 @@ export class CyberpunkWeaponSheet extends CyberpunkItemSheetV2 {
         }
         if (dmg && nextAmmoType !== "grenade") updates["system.damage"] = dmg;
         else if (dmg && nextAmmoType === "grenade" && !sys.damage) updates["system.damage"] = dmg;
+        const packSize = getPackSizeForCaliber(newCal);
+        if (packSize) updates["system.packSize"] = packSize;
       } else if (wt === "Ranged" && dmg) {
         updates["system.damage"] = dmg;
       }
@@ -289,6 +332,13 @@ export class CyberpunkWeaponSheet extends CyberpunkItemSheetV2 {
       if (newAt !== "grenade") updates["system.damage"] = dmg;
       else if (!item.system.damage) updates["system.damage"] = dmg;
       await item.update(updates);
+    });
+
+    // Option Type switch — the sheet swaps between value input,
+    // caliber dropdown, and damage-type dropdown based on the chosen
+    // type. Foundry re-renders after `item.update` naturally.
+    html.find('select[name="system.optionType"]').on('change', async ev => {
+      await item.update({ "system.optionType": ev.currentTarget.value });
     });
 
     // Drug slot — remove button (unslot the drug) and open on click.

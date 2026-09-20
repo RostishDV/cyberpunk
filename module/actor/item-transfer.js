@@ -297,9 +297,10 @@ export async function transferItem(sourceItem, targetActor) {
 
 /**
  * Detach every child of `parentItem` on its current actor: clears the
- * `flags.cyberpunk.attachedTo` flag on flag-attached items, and blanks the
- * `attachedAmmoId` / nested `weapon.attachedAmmoId` on the parent. The
- * children remain on the actor — they just no longer reference the parent.
+ * `flags.cyberpunk.attachedTo` flag on flag-attached items and
+ * `system.attachedTo` on weapon options, and blanks the `attachedAmmoId` /
+ * nested `weapon.attachedAmmoId` on the parent. The children remain on the
+ * actor — they just no longer reference the parent.
  *
  * Use this before transferring a parent item to a shop, so the contents stay
  * with the seller and the moved parent arrives "clean".
@@ -316,6 +317,15 @@ export async function detachAllChildren(parentItem) {
     await actor.updateEmbeddedDocuments("Item", flagChildren.map(i => ({
       _id: i.id,
       "flags.cyberpunk.-=attachedTo": null
+    })));
+  }
+
+  // Weapon options reference their weapon through `system.attachedTo`.
+  const weaponOptions = actor.items.filter(i => i.system?.attachedTo === parentItem.id);
+  if (weaponOptions.length) {
+    await actor.updateEmbeddedDocuments("Item", weaponOptions.map(i => ({
+      _id: i.id,
+      "system.attachedTo": ""
     })));
   }
 
@@ -448,6 +458,48 @@ export async function handleAmmoDrop(actor, event, item) {
   newData.system.sourceUuid = droppedUuid;
   await actor.createEmbeddedDocuments("Item", [newData]);
   return true;
+}
+
+/**
+ * Weapon Option drop. If the drop landed on a weapon row and the
+ * option is on the same actor, attach via `_attachOption` (validation
+ * — one per type, target is a fire-able weapon — lives there). If the
+ * option came from a compendium / another actor, creates a copy on
+ * the receiving actor and (only if a target weapon was hit) attaches.
+ * Otherwise the copy sits detached in the options list.
+ * Returns true when the drop was consumed as an Option, false otherwise.
+ */
+export async function handleOptionDrop(actor, event, item) {
+    if (!(item?.type === "weapon" && item.system?.weaponType === "Option")) return false;
+    if (!actor) return false;
+
+    const dropTarget = event?.target?.closest?.('.gear-row[data-item-id]');
+    const targetId = dropTarget?.dataset?.itemId;
+    const targetWeapon = targetId && targetId !== "unarmed"
+        ? actor.items.get(targetId)
+        : null;
+    const canAttach = targetWeapon && typeof targetWeapon._attachOption === "function";
+
+    // Same-actor drag: no copy needed. Attach if a valid target row
+    // was hit; otherwise ignore (the option's already on the sheet).
+    if (item.parent?.id === actor.id) {
+        if (canAttach) await targetWeapon._attachOption(item);
+        return true;
+    }
+
+    // Cross-actor / compendium: create a fresh copy on the receiving
+    // actor. Only ONE row per drop — Options don't stack; each attach
+    // slot is a distinct item.
+    const newData = item.toObject();
+    newData.type = "weapon";
+    newData.system = newData.system || {};
+    newData.system.weaponType = "Option";
+    newData.system.attachedTo = "";
+    const [created] = await actor.createEmbeddedDocuments("Item", [newData]);
+    if (canAttach && created) {
+        await targetWeapon._attachOption(created);
+    }
+    return true;
 }
 
 /**

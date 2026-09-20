@@ -107,6 +107,17 @@ export function bindWeaponAndOrdnanceHandlers(html, sheet) {
         await weapon._detachAmmo();
     });
 
+    // Detach an attached Weapon Option. The button carries the option's
+    // own item id — no need to know the parent weapon, `_detachOption`
+    // just clears the option's `attachedTo` field.
+    html.find('.gear-detach-option').click(async ev => {
+        ev.stopPropagation();
+        const optionId = ev.currentTarget.dataset.itemId;
+        const option = actor.items.get(optionId);
+        if (!option) return;
+        await option.update({ "system.attachedTo": "" });
+    });
+
     // Quantity input — shared by ammo and drug.
     html.find('.gear-quantity-input').click(ev => ev.target.select()).change(async ev => {
         const itemId = ev.currentTarget.dataset.itemId;

@@ -1,5 +1,5 @@
 import { localize, getHiddenLocationsForTargets, resolveTargetActor } from "../utils.js";
-import { getSkillsForCategory, meleeDamageBonus, ramBaseDamage } from "../lookups.js";
+import { getSkillsForCategory, meleeDamageBonus, ramBaseDamage, scaleMeleeDamage } from "../lookups.js";
 import { buildD10Roll, RollBundle } from "../dice.js";
 import { rollLocation } from "../utils.js";
 
@@ -363,20 +363,10 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     let hitLocation = "";
 
     if (this._baseDamage) {
-      let baseDamageFormula = this._baseDamage;
-      const mult = system.unarmedDamageMultiplier;
-      if (mult > 1) {
-        // Parse formula and multiply dice count
-        const diceMatch = baseDamageFormula.match(/^(\d+)d(\d+)$/);
-        if (diceMatch) {
-          const diceCount = Number(diceMatch[1]);
-          const diceSize = diceMatch[2];
-          baseDamageFormula = `${diceCount * mult}d${diceSize}`;
-        } else {
-          // Fallback for complex formulas (shouldn't happen with new system)
-          baseDamageFormula = `(${baseDamageFormula})*${mult}`;
-        }
-      }
+      // Kicks scale with the legs' multiplier; everything else with the arms'.
+      const meleeMult = this._actionKey === "Kick" ? system.kickDamageMultiplier : system.unarmedDamageMultiplier;
+      const scaledBase = scaleMeleeDamage(this._baseDamage, meleeMult);
+      const baseDamageFormula = scaledBase.roll;
 
       const baseDamageRoll = await new Roll(baseDamageFormula).evaluate();
 
@@ -389,7 +379,7 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       const totalDamage = Math.floor(baseDamageRoll.total) + strengthBonus + martialDamageBonus;
 
       // Build clean display formula (no floor wrapper, omit zero bonuses)
-      const displayParts = [baseDamageFormula];
+      const displayParts = [scaledBase.display];
       if (strengthBonus) displayParts.push(String(strengthBonus));
       if (martialDamageBonus) displayParts.push(String(martialDamageBonus));
       const displayFormula = displayParts.join(' + ');

@@ -22,7 +22,7 @@
  *     overrides `applyActiveEffects` to skip drug effects. See actor.js.
  */
 
-import { CUMULATIVE_STRENGTH_MUL } from "./lookups.js";
+import { CUMULATIVE_STRENGTH_MUL, effectiveBonusOp } from "./lookups.js";
 
 const DRUG_EFFECT_FLAG = "isDrugEffect";
 
@@ -147,7 +147,7 @@ export function bonusesToChanges(bonuses = []) {
         } else {
             key = `system.${b.property}`;
         }
-        const { mode, value } = modeAndValueForOp(b.op || "+", Number(b.value) || 0);
+        const { mode, value } = modeAndValueForOp(effectiveBonusOp(b.property, b.op), Number(b.value) || 0);
         out.push({
             key,
             mode,

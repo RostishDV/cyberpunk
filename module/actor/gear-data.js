@@ -26,7 +26,10 @@ import {
     boosterBonuses,
     defenderDefences,
     attackerClasses,
-    attackerEffects
+    attackerEffects,
+    weaponOptionTypes,
+    NUMERIC_OPTION_TYPES,
+    effectiveBonusOp
 } from "../lookups.js";
 import { calibers as CALIBERS } from "../calibers.js";
 import { COVER_TYPES } from "../conditions.js";
@@ -157,6 +160,11 @@ export function buildWeaponsList(actor) {
         })
         .map(w => {
             const sys = w.system;
+            // Effective wd — Option bonuses (range / accuracy / shots /
+            // chargesMax / rof / minBody / caliber / damageType) folded
+            // in. Raw sys is still used for cost / weight / shotsLeft
+            // / charges (persistent state, not option-modifiable).
+            const wd = w._resolvedWeaponData();
             const d = discrim(sys);
             const wType = d.weaponType;
             const wClass = d.weaponClass;
@@ -172,7 +180,10 @@ export function buildWeaponsList(actor) {
                 if (attachedAmmo && attachedAmmo.system?.weaponType !== "Ammo") attachedAmmo = null;
             }
 
-            const context = buildWeaponContextString({ sys, wType, wClass, attachedAmmo });
+            // Pass the effective wd shape so option-modified stats
+            // (Caliber swap, Range bonus, etc.) surface on the gear
+            // line's context string.
+            const context = buildWeaponContextString({ sys: wd, wType, wClass, attachedAmmo });
 
             return {
                 id: w.id,
@@ -190,13 +201,14 @@ export function buildWeaponsList(actor) {
                     return dmg && dmg !== '0' && dmg !== 0 ? dmg : '–';
                 })(),
                 shotsLeft: sys.shotsLeft ?? 0,
-                shots: sys.shots ?? 0,
+                shots: wd.shots ?? 0,
                 charges: sys.charges ?? 0,
-                chargesMax: sys.chargesMax ?? 0,
-                chargesDisplay: (sys.charges || sys.chargesMax) ? `${sys.charges ?? 0} / ${sys.chargesMax ?? 0}` : '–',
-                rof: sys.rof ?? 0,
-                canReload: isRanged && !!sys.attachedAmmoId && (sys.shotsLeft ?? 0) < (sys.shots ?? 0),
-                canCharge: (sys.charges ?? 0) < (sys.chargesMax ?? 0),
+                chargesMax: wd.chargesMax ?? 0,
+                chargesDisplay: (sys.charges || wd.chargesMax) ? `${sys.charges ?? 0} / ${wd.chargesMax ?? 0}` : '–',
+                rof: wd.rof ?? 0,
+                canReload: isRanged && !!sys.attachedAmmoId && (sys.shotsLeft ?? 0) < (wd.shots ?? 0),
+                canCharge: (sys.charges ?? 0) < (wd.chargesMax ?? 0),
+                attachedOptions: buildAttachedOptions(actor, w.id),
                 isCyberware: false,
                 isRanged,
                 isMelee,
@@ -219,6 +231,55 @@ export function buildWeaponsList(actor) {
                 attachedAmmoWeight: attachedAmmo?.system?.weight ?? 0
             };
         });
+}
+
+/**
+ * Shape a single Weapon Option item into a gear-tab row. Subtext
+ * reads "Option Type · <bonus>" — the bonus is the signed numeric
+ * for additive options or "→ Value" for the two swap variants.
+ */
+export function buildOptionRow(opt) {
+    const sys = opt.system || {};
+    const optType = sys.optionType || "range";
+    const typeLabelKey = weaponOptionTypes[optType];
+    const typeLabel = typeLabelKey ? localizeKey(typeLabelKey) : optType;
+    let bonusPart = "";
+    if (NUMERIC_OPTION_TYPES.has(optType)) {
+        const v = Number(sys.optionValue) || 0;
+        bonusPart = v >= 0 ? `+${v}` : `${v}`;
+    } else if (optType === "caliber") {
+        bonusPart = sys.caliber ? localizeKey(CALIBERS[sys.caliber] || "") : "";
+    } else if (optType === "damageType") {
+        bonusPart = sys.damageType ? localizeKey(meleeDamageTypes[sys.damageType] || "") : "";
+    }
+    return {
+        id: opt.id,
+        img: opt.img,
+        name: opt.name,
+        context: [typeLabel, bonusPart].filter(Boolean).join(" · "),
+        price: Number(sys.cost) || 0,
+        weight: Number(sys.weight) || 0,
+        optionType: optType,
+        attachedTo: sys.attachedTo || ""
+    };
+}
+
+/** Detached weapon options — no `attachedTo`. */
+export function buildOptionsList(actor) {
+    const items = actor.itemTypes.weapon || [];
+    return items
+        .filter(w => w.system?.weaponType === "Option")
+        .filter(w => !w.system?.attachedTo)
+        .map(buildOptionRow);
+}
+
+/** Options currently attached to `weaponId` on this actor. */
+export function buildAttachedOptions(actor, weaponId) {
+    if (!weaponId) return [];
+    const items = actor.itemTypes.weapon || [];
+    return items
+        .filter(w => w.system?.weaponType === "Option" && w.system?.attachedTo === weaponId)
+        .map(buildOptionRow);
 }
 
 /**
@@ -367,7 +428,7 @@ export function formatBonusLabel(label, op, value) {
  */
 export function summariseBonuses(bonuses, limit = 2) {
     return (bonuses || []).slice(0, limit).map(b => {
-        const op = b.op || "+";
+        const op = b.type === "property" ? effectiveBonusOp(b.property, b.op) : (b.op || "+");
         if (b.type === "property") {
             const propKey = toolBonusProperties[b.property] ?? netBonusProperties[b.property];
             const propLabel = propKey ? game.i18n.localize(`CYBERPUNK.${propKey}`) : b.property;

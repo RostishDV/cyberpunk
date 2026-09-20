@@ -7,6 +7,8 @@
 // CALIBER_VALID_AMMO_TYPES restricts which ammoTypes the Ammo sheet's dropdown
 // will offer per caliber. CALIBER_DAMAGE locks the damage formula for non-grenade
 // modes and pre-fills it for grenade ammo (which the user may then override).
+// CALIBER_PACK_SIZE pre-fills the Ammo pack size for calibers sold in a
+// non-standard pack; every other caliber leaves the item's own pack size alone.
 
 const STANDARD_4         = ["standard", "armorPiercing", "hollowPoint", "rubberSlug"];
 const STANDARD_4_GRENADE = [...STANDARD_4, "grenade"];
@@ -76,6 +78,7 @@ export const CALIBER_VALID_AMMO_TYPES = {
     "7mm":          STANDARD_4,
     "8_5_RJ":       AP_ONLY,
     "9mm":          STANDARD_4,
+    "9mm_ET":       AP_ONLY,
     "9mm_L":        STD_AP,
     "Flechette":    AP_ONLY,
     "Micromissile": STD_ONLY,
@@ -144,10 +147,19 @@ export const CALIBER_DAMAGE = {
     "7mm":          "1d6+2",
     "8_5_RJ":       "7d6",
     "9mm":          "2d6+1",
+    "9mm_ET":       "3d6",
     "9mm_L":        "2d6+4",
     "Flechette":    "1d5*1d2",
     "Micromissile": "4d6",
     "Sliver":       "2d6*1d3"
+};
+
+/**
+ * Per-caliber pack size (rounds per pack), for calibers that don't come in
+ * the item default. Pre-filled onto Ammo when its caliber is chosen.
+ */
+export const CALIBER_PACK_SIZE = {
+    "9mm_ET":       30
 };
 
 /**
@@ -211,6 +223,7 @@ export const calibers = {
     "7mm":          "Caliber7mm",
     "8_5_RJ":       "Caliber8_5_RJ",
     "9mm":          "Caliber9mm",
+    "9mm_ET":       "Caliber9mm_ET",
     "9mm_L":        "Caliber9mm_L",
     "Flechette":    "CaliberFlechette",
     "Micromissile": "CaliberMicromissile",
@@ -239,6 +252,14 @@ export function getValidAmmoTypesForCaliber(caliber) {
  */
 export function getDamageForCaliber(caliber) {
     return CALIBER_DAMAGE[caliber] || "";
+}
+
+/**
+ * Return the pack size a caliber is sold in, or null when the caliber has no
+ * fixed pack size (the Ammo item keeps whatever it already has).
+ */
+export function getPackSizeForCaliber(caliber) {
+    return CALIBER_PACK_SIZE[caliber] ?? null;
 }
 
 // Legacy alias retained for back-compat with code that imported the per-class

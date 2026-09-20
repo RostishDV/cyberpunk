@@ -935,7 +935,8 @@
 			"actorLink": "",
 			"deployedTokenUuid": "",
 			"programState": "inactive",
-			"bonuses": []
+			"bonuses": [],
+			"quantity": 1
 		},
 		"weapon": {
 			"templates": ["common"],
@@ -964,7 +965,10 @@
 			"ammoType": "standard",
 			"packSize": 20,
 			"quantity": 0,
-			"sourceUuid": ""
+			"sourceUuid": "",
+			"optionType": "range",
+			"optionValue": 0,
+			"attachedTo": ""
 		},
 		"armor": {
 			"templates": ["common"],
@@ -1006,7 +1010,8 @@
 				"caliber": "medium",
 				"ammoType": "standard"
 			},
-			"lastOwnerId": ""
+			"lastOwnerId": "",
+			"quantity": 1
 		},
 		"cyberware": {
 			"templates": ["common"],
@@ -1071,7 +1076,8 @@
 					"rLeg": { "stoppingPower": 0, "ablation": 0 }
 				},
 				"encumbrance": 0
-			}
+			},
+			"quantity": 1
 		},
 		"vehicle": {
 			"templates": ["common"],
@@ -1096,10 +1102,12 @@
 				"efficiency": 5,
 				"max": 50,
 				"value": 50
-			}
+			},
+			"quantity": 1
 		},
 		"misc": {
-			"templates": ["common"]
+			"templates": ["common"],
+			"quantity": 1
 		},
 		"role": {
 			"templates": ["common"],
@@ -1118,7 +1126,8 @@
 			"bonuses": [],
 			"isRechargeable": false,
 			"charges": 0,
-			"chargesMax": 0
+			"chargesMax": 0,
+			"quantity": 1
 		},
 		"drug": {
 			"templates": ["common"],

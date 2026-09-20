@@ -26,6 +26,8 @@ import {
     isStateProperty,
     netBonusProperties,
     isNetBonusProperty,
+    allowedOpsForProperty,
+    effectiveBonusOp,
     netwareFlavours,
     drugFlavours,
     getFlavourMeta
@@ -59,12 +61,11 @@ export const DEFAULT_CLASS_BY_TYPE = {
  * working without migration.
  */
 export function prepareBonuses(rawBonuses) {
-    // Full op set for stats / modifiers / skills.
+    // Full op set for skill rows. Property rows take theirs from
+    // `allowedOpsForProperty` (NET / State add-subtract only, the Melee
+    // Damage Multiplier × / ÷ only); a legacy op outside the set displays as
+    // the op the pipeline actually applies.
     const fullOps = ["+", "−", "×", "÷", "="];
-    // NET Bonuses and State bonuses are additive-only — no scaling, no
-    // override. Legacy rows that saved a `×` / `÷` / `=` op collapse to
-    // "+" in both the display and the pipeline (see actor.js pushBonus).
-    const addSubOps = ["+", "−"];
     const mkOpOptions = (op, allowed) => allowed.map(v => ({
         value: v, label: v, selected: op === v
     }));
@@ -95,9 +96,8 @@ export function prepareBonuses(rawBonuses) {
             const labelKey  = netBonus
                 ? netBonusProperties[bonus.property]
                 : toolBonusProperties[bonus.property];
-            const rawOp = bonus.op || "+";
-            const allowed = (netBonus || state) ? addSubOps : fullOps;
-            const op = allowed.includes(rawOp) ? rawOp : "+";
+            const allowed = allowedOpsForProperty(bonus.property);
+            const op = effectiveBonusOp(bonus.property, bonus.op);
             return {
                 ...bonus,
                 op,

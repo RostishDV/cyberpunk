@@ -1843,15 +1843,22 @@ input.skill-value.skill-level-input {
 // so the visual cohesion of weapon → attached ammo reads as a group.
 // ==========================================================================
 
-// Suppress the parent weapon's dashed bottom border when an attached ammo
-// addon immediately follows — the pair reads as one stacked unit.
-.gear-row.weapon-row:has(+ .gear-row.weapon-row.attached-ammo.attached) {
+// Suppress the parent weapon's dashed bottom border when an attached
+// addon (ammo OR option) immediately follows — the pair reads as one
+// stacked unit. Options stack on top of ammo per house-rule display
+// order (option first, then ammo).
+.gear-row.weapon-row:has(+ .gear-row.weapon-row.attached-option.attached),
+.gear-row.weapon-row:has(+ .gear-row.weapon-row.attached-ammo.attached),
+.gear-row.weapon-row.attached-option.attached:has(+ .gear-row.weapon-row.attached-option.attached),
+.gear-row.weapon-row.attached-option.attached:has(+ .gear-row.weapon-row.attached-ammo.attached) {
   border-bottom: none;
 }
 
-// Detached (unattached) ammo rows at the bottom of the Weapons block are
-// draggable onto a weapon row to attach. Match the cyberware option pattern.
-.gear-row.weapon-row.attached-ammo.detached {
+// Detached (unattached) ammo / option rows at the bottom of the
+// Weapons block are draggable onto a weapon row to attach. Match the
+// cyberware option pattern.
+.gear-row.weapon-row.attached-ammo.detached,
+.gear-row.weapon-row.attached-option.detached {
   cursor: grab;
 
   &.is-dragging {
