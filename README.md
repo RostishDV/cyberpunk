@@ -23,3 +23,5 @@ This system is distributed under the GNU GPLv3 license.
 - [Game-icons.net](https://game-icons.net) icons are licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
 - [Lucide](https://lucide.dev) icons are licensed under the [ISC License](https://github.com/lucide-icons/lucide/blob/main/LICENSE).
 - [Font Awesome Free](https://fontawesome.com) icons are licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Font Awesome fonts are licensed under [SIL OFL 1.1](https://scripts.sil.org/OFL).
+
+<img width="1920" height="1080" alt="nr" src="https://github.com/user-attachments/assets/a897389b-233d-4e0f-8a8e-5d08c2381d82" />
