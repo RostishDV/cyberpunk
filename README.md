@@ -8,6 +8,8 @@
 
 An unofficial fan-made interpretation of the Cyberpunk game systems by R. Talsorian Games for Foundry Virtual Tabletop. The core game is Cyberpunk 2020, expanded with Stress, Fright, Sleep, Addiction and many other systems from the supplements by Ianus Games. Netrunning comes from Cyberpunk RED. And I've made it beautiful.
 
+The name comes from the saga we've run with my players, during which the system was extensively tested.
+
 Inspired by the original Cyberpunk 2020 system for Foundry VTT by OctarineSourceror and Tilt.
 
 Cyberpunk is a registered trademark of CD PROJEKT S.A.
