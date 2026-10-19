@@ -685,16 +685,26 @@ export class CyberpunkItem extends Item {
     if(fireMode === fireModes.fullAuto) {
       const ammoLeft = Number(this.weaponData[this._getAmmoField()]) || 0;
       let bullets = Math.min(ammoLeft, this._getEffectiveRof());
-      let multiplier =
-          (range === ranges.close) ? 1
+      let multiplier = (range === ranges.close) ? 1
         : (range === ranges.pointBlank) ? 0
         : -1;
-      terms.push(multiplier * Math.floor(bullets/10))
+      
+      if (game.settings.get('cyberpunk', 'palychFullautoEnabled')) {
+        terms.push(Math.floor(bullets/3));
+      } else {
+        terms.push(multiplier * Math.floor(bullets/10));
+      }
     }
 
-    if((fireMode === fireModes.threeRoundBurst || fireMode === fireModes.twoRoundBurst)
-      && (range === ranges.close || range === ranges.medium)) {
+    if((fireMode === fireModes.threeRoundBurst || fireMode === fireModes.twoRoundBurst)) 
+    {
+      if (game.settings.get('cyberpunk', 'palychBurstEnabled')
+        && fireMode === fireModes.threeRoundBurst) {
+        terms.push(+1);
+      }
+      else if ((range === ranges.close || range === ranges.medium)) {
         terms.push(+3);
+      }
     }
 
     // Actor-side "Ranged Weapons Attack" bonus — accumulated on
@@ -1016,8 +1026,15 @@ export class CyberpunkItem extends Item {
       let allDamageRolls = [];
       let roundsHit;
       if (attackHits) {
-          const hitDie = maxRounds === 2 ? "1d2" : "1d3";
-          roundsHit = await new Roll(hitDie).evaluate();
+          if (game.settings.get('cyberpunk', 'palychBurstEnabled')) {
+            roundsHit = {
+              "total": Math.min(roundsFired, attackRoll.total - DC)
+            };
+          } else {
+            const hitDie = maxRounds === 2 ? "1d2" : "1d3";
+            roundsHit = await new Roll(hitDie).evaluate();
+          }
+
           for (let i = 0; i < roundsHit.total; i++) {
               let damageRoll = await new Roll(damageFormula).evaluate();
               allDamageRolls.push(damageRoll);

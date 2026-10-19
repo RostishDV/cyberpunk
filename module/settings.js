@@ -21,6 +21,54 @@ export function registerSystemSettings() {
   });
 
   /**
+   * Хомбрю Палыча по автофаерам.
+   */
+  game.settings.register("cyberpunk", "palychFullautoEnabled", {
+    name: "Palych full auto homebrew",
+    hint: "Removes difficulty change from autofire",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  /**
+   * Хомбрю палыча по очередям.
+   */
+  game.settings.register("cyberpunk", "palychBurstEnabled", {
+    name: "Palych bursts homebrew",
+    hint: "Changes burst difficults and hitted",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  /**
+   * Возвращение базовой системы человечности.
+   */
+  game.settings.register("cyberpunk", "useDefaultHumanity", {
+    name: "Use core 2020 hummanity",
+    hint: "Changes hummanity to 10pts per 1 EMP",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  /**
+   * Добавление поля доп.модификаторы во все проверки.
+   */
+  game.settings.register("cyberpunk", "additionalModsForChecksEnable", {
+    name: "Enable additional modes field",
+    hint: "Adds field 'additional mod' for every roll dialog",
+    scope: "world",
+    config: true,
+    type: Boolean,
+    default: false
+  });
+
+  /**
    * Game time offset from campaign start (ms). Hidden setting.
    * onChange: drug effects key their phase-expiration to this clock, so any
    * advancement (combat round, calendar dialog) re-checks every active drug
