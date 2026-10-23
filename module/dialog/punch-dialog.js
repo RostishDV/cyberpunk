@@ -68,6 +68,8 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     // Luck spending
     this._luckToSpend = 0;
     this._availableLuck = actor.system.stats.luck?.effective ?? actor.system.stats.luck?.total ?? 0;
+
+    this._additionalMods = 0;
   }
 
   /**
@@ -100,6 +102,8 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       pickLocation:    PunchDialog._onPickLocation,
       luckPlus:        PunchDialog._onLuckPlus,
       luckMinus:       PunchDialog._onLuckMinus,
+      additionalModsPlus:   PunchDialog._onAdditionalModsPlus,
+      additionalModsMinus:  PunchDialog._onAdditionalModsMinus,
       roll:            PunchDialog._onRoll
     }
   };
@@ -163,6 +167,23 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
   static _onLuckMinus(event, _target) {
     event?.preventDefault?.();
     if (this._luckToSpend > 0) { this._luckToSpend--; this._updateLuckDisplay(); }
+  }
+
+  static _onAdditionalModsMinus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods--; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  static _onAdditionalModsPlus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods++; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  _updateAdditionalModsDisplay() {
+    const luckVal = this.element.querySelector('.additional-value');
+    if (luckVal) luckVal.textContent = this._additionalMods;
   }
 
   static _onRoll(event, _target) { event?.preventDefault?.(); this._executeRoll(); }
@@ -237,7 +258,9 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       canIncreaseLuck: this._luckToSpend < this._availableLuck,
       canDecreaseLuck: this._luckToSpend > 0,
       hasAnyLuck: this._availableLuck > 0,
-      luckDisabled: this._availableLuck <= 0
+      luckDisabled: this._availableLuck <= 0,
+      additionalModsVisible: game.settings.get('cyberpunk', 'additionalModsForChecksEnable'),
+      additionalMods: this._additionalMods
     };
   }
 
@@ -305,12 +328,17 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const isBlinded = this.actor.statuses.has("blinded");
     const attackStat = isBlinded ? "luck" : "ref";
 
-    const extraMod = (this._conditions.prepared ? 2 : 0)
+    let extraMod = (this._conditions.prepared ? 2 : 0)
                    + (this._conditions.ambush ? 5 : 0)
                    + (this._conditions.distracted ? -2 : 0)
                    + (this._conditions.indirect ? -5 : 0)
                    + (this._selectedLocation && this._actionKey !== "Break" && this._actionKey !== "Choke" && this._actionKey !== "Crush" ? -4 : 0)
                    + this._luckToSpend;
+
+    if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+      && this._additionalMods !== 0) {
+      extraMod += this._additionalMods;
+    }
 
     const attackTerms = [`@stats.${attackStat}.total`];
 
@@ -511,12 +539,17 @@ export class PunchDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     const isBlinded = this.actor.statuses.has("blinded");
     const attackStat = isBlinded ? "luck" : "ref";
 
-    const extraMod = (this._conditions.prepared ? 2 : 0)
+    let extraMod = (this._conditions.prepared ? 2 : 0)
                    + (this._conditions.ambush ? 5 : 0)
                    + (this._conditions.distracted ? -2 : 0)
                    + (this._conditions.indirect ? -5 : 0)
                    + distancePenalty  // Ram distance penalty
                    + this._luckToSpend;
+    
+    if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+      && this._additionalMods !== 0) {
+      extraMod += this._additionalMods;
+    }
 
     const attackTerms = [`@stats.${attackStat}.total`];
 

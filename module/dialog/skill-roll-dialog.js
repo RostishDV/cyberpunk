@@ -22,6 +22,7 @@ export class SkillRollDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     this._luckToSpend = 0;
     this._availableLuck = actor.system.stats.luck?.effective ??
                           actor.system.stats.luck?.total ?? 0;
+    this._additionalMods = 0;
   }
 
   static DEFAULT_OPTIONS = {
@@ -30,11 +31,13 @@ export class SkillRollDialog extends HandlebarsApplicationMixin(ApplicationV2) {
     position: { width: 300, height: "auto" },
     window: { frame: true, positioned: true, resizable: false, minimizable: false, controls: [] },
     actions: {
-      closeDialog:     SkillRollDialog._onCloseDialog,
-      toggleCondition: SkillRollDialog._onToggleCondition,
-      luckPlus:        SkillRollDialog._onLuckPlus,
-      luckMinus:       SkillRollDialog._onLuckMinus,
-      roll:            SkillRollDialog._onRoll
+      closeDialog:          SkillRollDialog._onCloseDialog,
+      toggleCondition:      SkillRollDialog._onToggleCondition,
+      luckPlus:             SkillRollDialog._onLuckPlus,
+      luckMinus:            SkillRollDialog._onLuckMinus,
+      additionalModsPlus:   SkillRollDialog._onAdditionalModsPlus,
+      additionalModsMinus:  SkillRollDialog._onAdditionalModsMinus,
+      roll:                 SkillRollDialog._onRoll
     }
   };
 
@@ -76,7 +79,9 @@ export class SkillRollDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       availableLuck: this._availableLuck,
       canIncreaseLuck: this._luckToSpend < this._availableLuck,
       canDecreaseLuck: this._luckToSpend > 0,
-      hasAnyLuck: this._availableLuck > 0
+      hasAnyLuck: this._availableLuck > 0,
+      additionalModsVisible: game.settings.get('cyberpunk', 'additionalModsForChecksEnable'),
+      additionalMods: this._additionalMods
     };
   }
 
@@ -108,10 +113,27 @@ export class SkillRollDialog extends HandlebarsApplicationMixin(ApplicationV2) {
       `systems/cyberpunk/img/chat/${plusDisabled ? 'plus-disabled' : 'plus'}.svg`);
   }
 
+  static _onAdditionalModsMinus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods--; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  static _onAdditionalModsPlus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods++; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  _updateAdditionalModsDisplay() {
+    const luckVal = this.element.querySelector('.additional-value');
+    if (luckVal) luckVal.textContent = this._additionalMods;
+  }
+
   async _executeRoll() {
     const conditionMod = (this._conditions.prepared ? 2 : 0) +
                          (this._conditions.distracted ? -2 : 0);
-    const extraMod = conditionMod + this._luckToSpend;
+    let extraMod = conditionMod + this._luckToSpend;
 
     if (this._luckToSpend > 0) {
       const currentSpent = this.actor.system.stats.luck.spent || 0;
@@ -120,6 +142,11 @@ export class SkillRollDialog extends HandlebarsApplicationMixin(ApplicationV2) {
         "system.stats.luck.spent": currentSpent + this._luckToSpend,
         "system.stats.luck.spentAt": currentSpentAt || Date.now()
       });
+    }
+
+    if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+      && this._additionalMods !== 0) {
+      extraMod += this._additionalMods;
     }
 
     this.close({ animate: false });

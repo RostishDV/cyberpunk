@@ -21,6 +21,7 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
     this._availableLuck = actor.system.stats.luck?.effective ?? actor.system.stats.luck?.total ?? 0;
     this._skillOptions = this._buildSkillOptions();
     if (this._skillOptions.length > 0) this._selectedSkill = this._skillOptions[0];
+    this._additionalMods = 0;
   }
 
   static DEFAULT_OPTIONS = {
@@ -34,6 +35,8 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
       pickSkill:      DefenceRollDialog._onPickSkill,
       luckPlus:       DefenceRollDialog._onLuckPlus,
       luckMinus:      DefenceRollDialog._onLuckMinus,
+      additionalModsPlus:   DefenceRollDialog._onAdditionalModsPlus,
+      additionalModsMinus:  DefenceRollDialog._onAdditionalModsMinus,
       roll:           DefenceRollDialog._onRoll
     }
   };
@@ -77,6 +80,23 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
   static _onLuckMinus(event, _target) {
     event?.preventDefault?.();
     if (this._luckToSpend > 0) { this._luckToSpend--; this._updateLuckDisplay(); }
+  }
+
+  static _onAdditionalModsMinus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods--; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  static _onAdditionalModsPlus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods++; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  _updateAdditionalModsDisplay() {
+    const luckVal = this.element.querySelector('.additional-value');
+    if (luckVal) luckVal.textContent = this._additionalMods;
   }
 
   static _onRoll(event, _target) { event?.preventDefault?.(); this._executeRoll(); }
@@ -127,7 +147,8 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
       canIncreaseLuck: this._luckToSpend < this._availableLuck,
       canDecreaseLuck: this._luckToSpend > 0,
       hasAnyLuck: this._availableLuck > 0,
-      luckDisabled
+      additionalModsVisible: game.settings.get('cyberpunk', 'additionalModsForChecksEnable'),
+      additionalMods: this._additionalMods
     };
   }
 
@@ -209,6 +230,13 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
     const monomaniaPenalty = (this.actor.system.psychosis?.obsession ?? 0) >= 51 ? -4 : 0;
     const skillValue = this._selectedSkill.value;
     const martialBonus = this._selectedSkill.martialBonus;
+    let additionalMod = 0;
+
+    if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+      && this._additionalMods !== 0) {
+      additionalMod = this._additionalMods;
+    }
+
     const parts = [
       skillValue,
       skill.system.stat ? `@stats.${skill.system.stat}.total` : null,
@@ -218,7 +246,8 @@ export class DefenceRollDialog extends HandlebarsApplicationMixin(ApplicationV2)
       fastDrawPenalty || null,
       restrainedPenalty || null,
       grapplingPenalty || null,
-      monomaniaPenalty || null
+      monomaniaPenalty || null,
+      additionalMod || null
     ].filter(Boolean);
 
     const roll = buildD10Roll(parts, this.actor.system);

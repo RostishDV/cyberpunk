@@ -22,6 +22,7 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
     this._selectedLocation = null;
     this._calculatedDistance = this._calculateDistanceToTarget();
     this._selectedRange = this._getAutoRangeFromDistance() || ranges.close;
+    this._additionalMods = 0;
   }
 
   static DEFAULT_OPTIONS = {
@@ -37,6 +38,8 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
       pickLocation:    RangeSelectionDialog._onPickLocation,
       luckPlus:        RangeSelectionDialog._onLuckPlus,
       luckMinus:       RangeSelectionDialog._onLuckMinus,
+      additionalModsPlus:   RangeSelectionDialog._onAdditionalModsPlus,
+      additionalModsMinus:  RangeSelectionDialog._onAdditionalModsMinus,
       roll:            RangeSelectionDialog._onRoll
     }
   };
@@ -91,6 +94,23 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
     }
   }
 
+  static _onAdditionalModsMinus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods--; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  static _onAdditionalModsPlus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods++; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  _updateAdditionalModsDisplay() {
+    const luckVal = this.element.querySelector('.additional-value');
+    if (luckVal) luckVal.textContent = this._additionalMods;
+  }
+
   static _onLuckPlus(event, _target) {
     event?.preventDefault?.();
     if (this._luckToSpend < this._availableLuck) { this._luckToSpend++; this._updateLuckDisplay(); }
@@ -130,7 +150,9 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
       isSingleShot: this.fireMode === fireModes.singleShot,
       hiddenLocations: getHiddenLocationsForTargets(this.targetTokens),
       isExotic,
-      weaponName: this.weapon.name
+      weaponName: this.weapon.name,
+      additionalModsVisible: game.settings.get('cyberpunk', 'additionalModsForChecksEnable'),
+      additionalMods: this._additionalMods
     };
   }
 
@@ -203,19 +225,25 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
   }
 
   async _executeRoll() {
-    const fireOptions = {
+    let fireOptions = {
       fireMode: this.fireMode,
       range: this._selectedRange,
       ambush: this._conditions.ambush,
       ricochet: this._conditions.ricochet,
-      extraMod: (this._conditions.prepared ? 2 : 0)
-              + (this._conditions.distracted ? -2 : 0)
-              + this._luckToSpend,
       aimRounds: 0, blinded: false, dualWield: false, fastDraw: false,
       hipfire: false, running: false, turningToFace: false,
       targetArea: this._selectedLocation || "",
       targetActor: resolveTargetActor(this.targetTokens?.[0])
     };
+
+    let extraMod = (this._conditions.prepared ? 2 : 0)
+              + (this._conditions.distracted ? -2 : 0)
+              + this._luckToSpend;
+
+    if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+      && this._additionalMods !== 0) {
+      extraMod += this._additionalMods;
+    }
 
     if (this._luckToSpend > 0) {
       const currentSpent = this.actor.system.stats.luck.spent || 0;
@@ -225,6 +253,8 @@ export class RangeSelectionDialog extends HandlebarsApplicationMixin(Application
         "system.stats.luck.spentAt": currentSpentAt || Date.now()
       });
     }
+
+    fireOptions.extraMod = extraMod;
 
     this.close({ animate: false });
     this.weapon._resolveAttack(fireOptions, this.targetTokens);

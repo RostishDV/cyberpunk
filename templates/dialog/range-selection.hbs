@@ -77,6 +77,27 @@
   </div>
   {{/if}}
 
+  {{!-- additional mods bar --}}
+  {{#if additionalModsVisible }}
+  <div class="fire-mode-section">
+    <img src="systems/cyberpunk/img/chat/luck.svg" alt="">
+    <span class="fire-mode-label">{{localize "CYBERPUNK.additionalMods"}}</span>
+  </div>
+
+  {{!-- Luck controls --}}
+  <div class="luck-controls">
+    <button type="button" class="luck-btn luck-minus-btn" data-action="additionalModsMinus">
+      <img src="systems/cyberpunk/img/chat/minus.svg" alt="-">
+    </button>
+    <div class="luck-display">
+      <span class="fire-mode-label additional-value">{{additionalMods}}</span>
+    </div>
+    <button type="button" class="luck-btn luck-plus-btn" data-action="additionalModsPlus">
+      <img src="systems/cyberpunk/img/chat/plus.svg" alt="+">
+    </button>
+  </div>
+  {{/if}}
+
   {{!-- Luck section bar --}}
   <div class="fire-mode-section">
     <img src="systems/cyberpunk/img/chat/luck.svg" alt="">

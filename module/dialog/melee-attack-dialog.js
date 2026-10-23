@@ -18,6 +18,7 @@ export class MeleeAttackDialog extends HandlebarsApplicationMixin(ApplicationV2)
     this._selectedLocation = null;
     this._luckToSpend = 0;
     this._availableLuck = actor.system.stats.luck?.effective ?? actor.system.stats.luck?.total ?? 0;
+    this._additionalMods = 0;
   }
 
   static DEFAULT_OPTIONS = {
@@ -32,6 +33,8 @@ export class MeleeAttackDialog extends HandlebarsApplicationMixin(ApplicationV2)
       pickLocation:    MeleeAttackDialog._onPickLocation,
       luckPlus:        MeleeAttackDialog._onLuckPlus,
       luckMinus:       MeleeAttackDialog._onLuckMinus,
+      additionalModsPlus:   MeleeAttackDialog._onAdditionalModsPlus,
+      additionalModsMinus:  MeleeAttackDialog._onAdditionalModsMinus,
       roll:            MeleeAttackDialog._onRoll
     }
   };
@@ -114,6 +117,23 @@ export class MeleeAttackDialog extends HandlebarsApplicationMixin(ApplicationV2)
     }
   }
 
+  static _onAdditionalModsMinus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods--; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  static _onAdditionalModsPlus(event, _target) {
+    event?.preventDefault?.();
+    this._additionalMods++; 
+    this._updateAdditionalModsDisplay();
+  }
+
+  _updateAdditionalModsDisplay() {
+    const luckVal = this.element.querySelector('.additional-value');
+    if (luckVal) luckVal.textContent = this._additionalMods;
+  }
+
   static _onRoll(event, _target) { event?.preventDefault?.(); this._executeRoll(); }
 
   async _prepareContext(_options) {
@@ -130,7 +150,9 @@ export class MeleeAttackDialog extends HandlebarsApplicationMixin(ApplicationV2)
       canIncreaseLuck: this._luckToSpend < this._availableLuck && !this._executeSelected,
       canDecreaseLuck: this._luckToSpend > 0 && !this._executeSelected,
       hasAnyLuck: this._availableLuck > 0,
-      luckDisabled: this._executeSelected || this._availableLuck <= 0
+      luckDisabled: this._executeSelected || this._availableLuck <= 0,
+      additionalModsVisible: game.settings.get('cyberpunk', 'additionalModsForChecksEnable'),
+      additionalMods: this._additionalMods
     };
   }
 
@@ -189,13 +211,20 @@ export class MeleeAttackDialog extends HandlebarsApplicationMixin(ApplicationV2)
           "system.stats.luck.spentAt": currentSpentAt || Date.now()
         });
       }
-      const attackMods = {
-        extraMod: (this._conditions.prepared ? 2 : 0)
+      let extraMod = (this._conditions.prepared ? 2 : 0)
                 + (this._conditions.ambush ? 5 : 0)
                 + (this._conditions.distracted ? -2 : 0)
                 + (this._conditions.indirect ? -5 : 0)
                 + (this._selectedLocation ? -4 : 0)
-                + this._luckToSpend,
+                + this._luckToSpend;
+
+      if (game.settings.get('cyberpunk', 'additionalModsForChecksEnable') 
+        && this._additionalMods !== 0) {
+        extraMod += this._additionalMods;
+      }
+
+      const attackMods = {
+        extraMod: extraMod,
         cyberTerminus: "NoCyberlimb",
         targetArea: this._selectedLocation || "",
         targetActor: resolveTargetActor(this.targetTokens?.[0])

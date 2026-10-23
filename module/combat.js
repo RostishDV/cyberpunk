@@ -35,7 +35,7 @@ export class CyberpunkCombat extends Combat {
             }
 
             let luckMod = 0;
-
+            let additionalMods = 0;
             // Show dialog for actors owned by the current user
             if (combatant.actor.isOwner) {
                 const result = await InitiativeRollDialog.show(
@@ -48,6 +48,7 @@ export class CyberpunkCombat extends Combat {
                 if (result === null) continue;
 
                 luckMod = result.luckMod;
+                additionalMods = result.additionalMods;
             }
 
             // Use the provided formula or the system's initiative formula from system.json
@@ -56,6 +57,9 @@ export class CyberpunkCombat extends Combat {
             // Add luck modifier if any
             if (luckMod > 0) {
                 rollFormula = `${rollFormula} + ${luckMod}`;
+            }
+            if (additionalMods > 0) {
+                rollFormula = `${rollFormula} + ${additionalMods}`;
             }
 
             const roll = await new Roll(rollFormula, combatant.actor.getRollData()).evaluate();

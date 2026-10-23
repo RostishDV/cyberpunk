@@ -658,5 +658,6 @@
   "CYBERPUNK.BuyItemsTitle": "Купить предметы",
   "CYBERPUNK.SellItemsTitle": "Продать предметы",
   "CYBERPUNK.DeleteItem": "Удалить предмет",
-  "CYBERPUNK.NoCharacterAssigned": "Назначьте персонажа своему пользователю, чтобы торговать в этом магазине."
+  "CYBERPUNK.NoCharacterAssigned": "Назначьте персонажа своему пользователю, чтобы торговать в этом магазине.",
+  "CYBERPUNK.additionalMods": "Дополнительные модификаторы"
 }

@@ -1338,5 +1338,6 @@
   "CYBERPUNK.NoCharacterAssigned": "Assign a character to your user to trade with this shop.",
   "CYBERPUNK.VisionModeLowLight": "Low Light",
   "CYBERPUNK.VisionModeInfrared": "Infrared",
-  "CYBERPUNK.VisionModeThermo": "Thermographic"
+  "CYBERPUNK.VisionModeThermo": "Thermographic",
+  "CYBERPUNK.additionalMods": "Additonal modifiers"
 }
